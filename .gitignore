@@ -1,0 +1,38 @@
+# ── Python ─────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# ── Sanal ortam ────────────────────────────────────────
+venv/
+.venv/
+env/
+
+# ── Veritabanı & kullanıcı verisi (HASSAS — yüklenmez!) ─
+data/app.db
+data/*.db
+data/*.sqlite*
+*.db
+*.sqlite*
+
+# ── Sırlar / ortam değişkenleri ────────────────────────
+.env
+.env.*
+secrets.toml
+.streamlit/secrets.toml
+
+# ── Yedekler & loglar ──────────────────────────────────
+backups/
+*.log
+*.bak
+
+# ── Üretilen çıktılar (test/deney artımları) ───────────
+deney_sonuclari.csv
+test_rapor.pdf
+
+# ── İşletim sistemi / IDE ──────────────────────────────
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

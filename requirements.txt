@@ -1,0 +1,27 @@
+# LoadPlan Pro — Enterprise Requirements
+
+# Temel
+streamlit>=1.32.0
+plotly>=5.20.0
+kaleido>=0.2.1
+pandas>=2.0.0
+numpy>=1.24.0
+
+# Geometri & NFP  ← STL/STEP için ZORUNLU
+trimesh>=4.0.0
+shapely>=2.0.0
+
+# Rapor
+reportlab>=4.1.0
+openpyxl>=3.1.0
+
+# Auth
+bcrypt>=4.1.0
+
+# Veritabanı
+sqlalchemy>=2.0.0
+python-dotenv>=1.0.0
+psycopg2-binary>=2.9.0
+
+# STEP okuma (isteğe bağlı, Docker/local'da aktif edin)
+# cadquery>=2.4.0

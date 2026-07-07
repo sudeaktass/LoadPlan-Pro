@@ -1,0 +1,47 @@
+# LoadPlan Pro — Yeni Bağımlılıklar (R3 + R4 + R5)
+# ==================================================
+# Bu dosya mevcut requirements.txt'e EKLENECEK paketler içindir.
+# Tam requirements için ana requirements.txt dosyanıza ekleyin.
+
+# ── R5: QR kod entegrasyonu (Sürücü Yükleme Talimatı PDF) ──────────────
+qrcode[pil]>=7.4.0      # QR kod üretimi
+Pillow>=10.0.0           # qrcode[pil] bağımlılığı, görsel işleme
+
+# ── R3: Yedekleme için (mevcut paketler yeterli) ───────────────────────
+# - sqlite3 standart kütüphanede, ek paket gerekmez
+# - PostgreSQL yedekleme için pg_dump binary'si sistemde kurulu olmalı:
+#     Ubuntu: sudo apt install postgresql-client
+#     macOS:  brew install postgresql
+#     Windows: PostgreSQL kurulumundaki bin/ klasörünü PATH'e ekle
+
+# ── R4: Rol bazlı UI (mevcut paketler yeterli) ─────────────────────────
+# - bcrypt, streamlit, sqlalchemy zaten requirements.txt'te
+
+# ── KULLANIM NOTLARI ───────────────────────────────────────────────────
+#
+# R3 — Yedekleme:
+#   ENV değişkenleri (opsiyonel):
+#     BACKUP_DIR=data/backups
+#     BACKUP_RETENTION_DAYS=30
+#     PG_DUMP_BIN=/usr/bin/pg_dump
+#
+#   Cron örneği (Linux/macOS):
+#     0 2 * * *  cd /app && python backup_manager.py >> /var/log/lp_backup.log 2>&1
+#
+#   Görev Zamanlayıcı (Windows):
+#     schtasks /create /tn LoadPlanBackup ^
+#       /tr "python C:\app\backup_manager.py" /sc daily /st 02:00
+#
+# R4 — Rol Bazlı UI:
+#   ENV değişkeni (opsiyonel):
+#     SESSION_TIMEOUT_SECONDS=1800   # default 30 dk
+#
+#   Rol yetki matrisi:
+#     admin    → Tüm sayfalar + Kullanıcı ekleme + Yedekleme + Tam Optimizasyon
+#     manager  → Tüm sayfalar (Kullanıcı ekleme HARİÇ) + Tam Optimizasyon
+#     operator → Dashboard + Optimizasyon (Tam Opt hariç) + Projelerim (sadece kendi projeleri)
+#
+# R5 — Sürücü Talimatı PDF:
+#   QR kod içeriği:  "LP-{proje}|{araç_id}|{parça_id}|{x},{y},{z}"
+#   Yükleme sırası:  Y büyük → önce yüklenir (kapıdan uzak → arka tarafa)
+#                    Aynı Y için Z büyük → önce (üst raf önce)
