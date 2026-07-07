@@ -36,3 +36,6 @@ test_rapor.pdf
 Thumbs.db
 .vscode/
 .idea/
+
+# Ozel tez dosyalari (GitHub disinda tutulur)
+*.docx
