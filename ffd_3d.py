@@ -33,21 +33,17 @@ import time
 from typing import List, Dict, Optional, Tuple
 
 from core_3d import (
-    check_stacking_rules,
+    check_stacking_rules, gravity_settle_placements,
     Piece3D, Truck3D, Placement3D, CuttingPlan3D,
-    get_all_rotations_3d
+    get_all_rotations_3d, piece_used_volume as _piece_used_volume
 )
 from extreme_points_3d import create_packing_engine
 from priority_utils import sort_piece_list_inplace, validate_priority, get_priority_zone
 
 
-def _piece_used_volume(placement, piece_info):
-    """[KORUNDU] Gerçek kullanılan hacim."""
-    if piece_info:
-        piece = piece_info.get(placement.piece_id)
-        if piece and piece.shape == "cylinder":
-            return piece.get_actual_volume()
-    return placement.get_volume()
+# _piece_used_volume artık core_3d.piece_used_volume'dan import ediliyor
+# (yukarıdaki import satırına bakınız). Buradaki yerel kopya kaldırıldı —
+# davranış birebir aynı, tek fark tanımın tek yerde durması.
 
 
 # ─── [EKLENDİ] MULTI-CRITERIA SIRALAMA ──────────────────────────────────────
@@ -117,9 +113,13 @@ def _select_best_fit_bin(
                 continue
 
             # Yerleştirme sonrası tahmini doluluk oranı
+            # (silindir için gerçek hacim — _piece_used_volume ile tutarlı)
             current_used = sum(_piece_used_volume(p, piece_info)
                                for p in placements_by_bin.get(bin_id, []))
-            new_used = current_used + (piece.width * piece.length * piece.height)
+            _cand_vol = (piece.get_actual_volume()
+                         if piece.shape == "cylinder"
+                         else piece.width * piece.length * piece.height)
+            new_used = current_used + _cand_vol
             truck_vol = truck.get_volume()
             trial_util = new_used / truck_vol if truck_vol > 0 else 0
 
@@ -290,6 +290,11 @@ def ffd_3d_optimization(
             print(f"  ✅ {placed_count}/{total_pieces} yerleştirildi")
 
     # ── SONUÇ ────────────────────────────────────────────────────────────
+    # Gravity settle — Greedy ile AYNI fizik son işlemi (tutarlılık)
+    for bin_id in list(placements_by_bin.keys()):
+        placements_by_bin[bin_id] = gravity_settle_placements(
+            placements_by_bin[bin_id], piece_info=piece_info)
+
     total_volume = 0
     used_volume = 0
     total_waste = 0

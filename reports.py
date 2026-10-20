@@ -310,6 +310,183 @@ def generate_pdf_report(
 
 
 # ============================================================================
+# EXCEL YARDIMCILARI — stil + yükleme talimatı sayfası (yeniden kullanılabilir)
+# ============================================================================
+
+def _xl_styles():
+    """Ortak Excel stil seti."""
+    return {
+        "hdr_fill":   PatternFill("solid", fgColor=XLSX_HEADER),
+        "sub_fill":   PatternFill("solid", fgColor=XLSX_SUBHDR),
+        "accent_fill":PatternFill("solid", fgColor=XLSX_ACCENT),
+        "white_fill": PatternFill("solid", fgColor="FFFFFF"),
+        "hdr_font":   Font(bold=True, color="FFFFFF", size=10),
+        "norm_font":  Font(size=9),
+        "center":     Alignment(horizontal="center", vertical="center", wrap_text=True),
+        "border":     Border(left=Side(style="thin"), right=Side(style="thin"),
+                             top=Side(style="thin"),  bottom=Side(style="thin")),
+    }
+
+
+def _safe_sheet_name(name: str, used: set) -> str:
+    """Excel sayfa adı: yasak karakterler temizlenir, 31 karakter, benzersiz."""
+    clean = "".join(c for c in name if c not in "\\/*?:[]").strip() or "Sayfa"
+    clean = clean[:28]
+    final, i = clean, 2
+    while final in used:
+        final = f"{clean}~{i}"[:31]
+        i += 1
+    used.add(final)
+    return final
+
+
+def _add_loading_sheet(wb, sheet_title: str, project_name: str,
+                       plan, trucks: List[dict], piece_info: dict) -> None:
+    """
+    'Yükleme Talimatı' sayfası — TEK plan için. Hem tekli rapor hem de
+    genel (tüm algoritmalar) raporu bu fonksiyonu kullanır; sıralama
+    mantığı tek yerde yaşar.
+    """
+    S = _xl_styles()
+
+    def style_header(cell):
+        cell.fill = S["hdr_fill"]; cell.font = S["hdr_font"]
+        cell.alignment = S["center"]; cell.border = S["border"]
+
+    def style_row(cell, even=True):
+        cell.fill = S["sub_fill"] if even else S["white_fill"]
+        cell.font = S["norm_font"]; cell.alignment = S["center"]
+        cell.border = S["border"]
+
+    ws_lt = wb.create_sheet(sheet_title)
+
+    ws_lt["A1"] = f"Yükleme Talimatı — {project_name}"
+    ws_lt["A1"].font = Font(bold=True, size=13, color=XLSX_HEADER)
+    ws_lt.merge_cells("A1:H1")
+    ws_lt["A1"].alignment = Alignment(horizontal="left", vertical="center")
+    ws_lt.row_dimensions[1].height = 22
+
+    _algo_lbl = getattr(plan, "algorithm", "")
+    ws_lt["A2"] = (
+        f"Algoritma: {_algo_lbl}  |  "
+        "📋 Yükleme sırası: Kapıdan en uzak (kabin tarafı, Y=0) satırın alt "
+        "katmanı yerleştirilir → hemen üstündeki katman eklenir → bir sıra "
+        "kapıya doğru ilerlenir → tekrar. "
+        "Sıra No 1 = kabin tarafına ilk yerleşen ürün | Son Sıra = kapıya en yakın ürün."
+    )
+    ws_lt["A2"].font = Font(italic=True, size=9, color="546E7A")
+    ws_lt.merge_cells("A2:H2")
+    ws_lt.row_dimensions[2].height = 16
+
+    non_empty_bins = [(i, b) for i, b in enumerate(plan.bins) if b]
+    truck_assignments = getattr(plan, "truck_assignments", {}) or {}
+    trucks_by_id_lt = {t.get("ID", ""): t for t in trucks}
+
+    ws_lt["A3"] = "Araç Yükleme Sırası:"
+    ws_lt["A3"].font = Font(bold=True, size=10, color=XLSX_HEADER)
+    ws_lt.row_dimensions[3].height = 16
+
+    order_parts = [
+        f"Araç {i + 1}  ({truck_assignments.get(i, f'V{i+1}')})"
+        for i, _ in non_empty_bins
+    ]
+    ws_lt["A4"] = "  →  ".join(order_parts)
+    ws_lt["A4"].font = Font(size=9)
+    ws_lt.merge_cells("A4:H4")
+    ws_lt.row_dimensions[4].height = 16
+
+    lt_headers = [
+        "Sıra No", "Palet ID", "Boyut G×U×Y (cm)",
+        "Ağırlık (kg)", "Konum (X, Y, Z)", "Müşteri",
+        "Öncelik", "Dikkat Notları",
+    ]
+    lt_col_widths = [10, 18, 20, 13, 18, 18, 10, 24]
+    frag_fill  = PatternFill("solid", fgColor="FFF9C4")
+    truck_hdr_fill = PatternFill("solid", fgColor="0D47A1")
+
+    def _gp(pl, attr, default=0):
+        if hasattr(pl, attr):
+            return getattr(pl, attr)
+        if hasattr(pl, "get"):
+            return pl.get(attr, default)
+        return default
+
+    current_row = 6
+
+    for bin_idx, bin_placements in non_empty_bins:
+        truck_id   = truck_assignments.get(bin_idx, f"V{bin_idx + 1}")
+        truck_dict = trucks_by_id_lt.get(truck_id, {})
+        tw = truck_dict.get("Genişlik (cm)", 0)
+        tl = truck_dict.get("Uzunluk (cm)", 0)
+        th = truck_dict.get("Yükseklik (cm)", 0)
+
+        truck_label = (
+            f"  ARAÇ {bin_idx + 1}:  {truck_id}  "
+            f"({tw}×{tl}×{th} cm)  —  {len(bin_placements)} parça"
+        )
+        cell_th = ws_lt.cell(current_row, 1, truck_label)
+        cell_th.font = Font(bold=True, size=11, color="FFFFFF")
+        cell_th.fill = truck_hdr_fill
+        cell_th.alignment = Alignment(horizontal="left", vertical="center")
+        cell_th.border = S["border"]
+        ws_lt.merge_cells(start_row=current_row, start_column=1,
+                          end_row=current_row, end_column=len(lt_headers))
+        ws_lt.row_dimensions[current_row].height = 22
+        current_row += 1
+
+        for c, h in enumerate(lt_headers, 1):
+            style_header(ws_lt.cell(current_row, c, h))
+        ws_lt.row_dimensions[current_row].height = 18
+        current_row += 1
+
+        # Yükleme sırası: kabin tarafı (Y=0) önce → kapıya ilerle (LIFO)
+        sorted_placements = sorted(
+            bin_placements,
+            key=lambda pl: (_gp(pl, "y", 0), _gp(pl, "z", 0), _gp(pl, "x", 0)),
+        )
+
+        for seq, pl in enumerate(sorted_placements, 1):
+            pid = _gp(pl, "piece_id", "—") or "—"
+            px, py, pz = _gp(pl, "x", 0), _gp(pl, "y", 0), _gp(pl, "z", 0)
+            pw, pln, pht = _gp(pl, "width", 0), _gp(pl, "length", 0), _gp(pl, "height", 0)
+
+            pinfo    = (piece_info or {}).get(pid, {})
+            weight   = pinfo.get("weight", 0) or 0
+            customer = pinfo.get("customer", "") or pinfo.get("Müşteri", "") or ""
+            priority = pinfo.get("priority", "") or ""
+            fragile  = bool(pinfo.get("is_fragile") or pinfo.get("fragile"))
+            no_top   = bool(pinfo.get("no_top_load")
+                            or pinfo.get("üstüne_yük_konmasın"))
+
+            notes = []
+            if fragile:
+                notes.append("⚠ Kırılgan")
+            if no_top:
+                notes.append("🚫 Üstüne Yük Koyma")
+            if str(priority) == "1":
+                notes.append("🚪 Kapıya Yakın")
+            note_str = " · ".join(notes) if notes else ""
+
+            row_vals = [
+                seq, pid, f"{pw}×{pln}×{pht}", round(float(weight), 1),
+                f"({px}, {py}, {pz})", str(customer),
+                str(priority) if priority else "", note_str,
+            ]
+            even = seq % 2 == 0
+            for c, v in enumerate(row_vals, 1):
+                cell = ws_lt.cell(current_row, c, v)
+                style_row(cell, even)
+                if fragile:
+                    cell.fill = frag_fill
+            current_row += 1
+
+        current_row += 1
+
+    for col, w in enumerate(lt_col_widths, 1):
+        ws_lt.column_dimensions[get_column_letter(col)].width = w
+
+
+# ============================================================================
 # EXCEL RAPORU
 # ============================================================================
 
@@ -370,7 +547,8 @@ def generate_excel_report(
     ws_sum["A1"].font = Font(bold=True, size=14, color=XLSX_HEADER)
     ws_sum["A2"] = f"Proje: {project_name}"
     ws_sum["A2"].font = Font(bold=True, size=11)
-    ws_sum["A3"] = f"Tarih: {datetime.now().strftime('%d.%m.%Y %H:%M')} | En İyi: {best_algo}"
+    ws_sum["A3"] = (f"Tarih: {datetime.now().strftime('%d.%m.%Y %H:%M')} | "
+                    f"Rapor Algoritması: {best_algo}")
     ws_sum["A3"].font = Font(italic=True, size=9, color="546E7A")
 
     best = results.get(best_algo, {})
@@ -530,171 +708,113 @@ def generate_excel_report(
     set_col_widths(ws_cmp, [22, 10, 10, 10, 14, 12, 12])
 
     # ========================================================================
-    # Sayfa 5: Yükleme Talimatı (best_plan mevcutsa)
+    # Sayfa 5: Yükleme Talimatı (seçilen plan) — ortak yardımcı kullanır
     # ========================================================================
     if best_plan is not None and hasattr(best_plan, "bins") and best_plan.bins:
-        ws_lt = wb.create_sheet("Yükleme Talimatı")
-
-        # ── Sayfa başlığı ────────────────────────────────────────────────────
-        ws_lt["A1"] = f"Yükleme Talimatı — {project_name}"
-        ws_lt["A1"].font = Font(bold=True, size=13, color=XLSX_HEADER)
-        ws_lt.merge_cells("A1:H1")
-        ws_lt["A1"].alignment = Alignment(horizontal="left", vertical="center")
-        ws_lt.row_dimensions[1].height = 22
-
-        ws_lt["A2"] = (
-            "📋 Yükleme sırası: En arka satırın alt katmanı yerleştirilir → "
-            "hemen üstündeki katman eklenir → bir sıra kapıya doğru ilerlenir → tekrar. "
-            "Sıra No 1 = en arkaya ilk yerleşen ürün | Son Sıra = kapıya en yakın ürün."
-        )
-        ws_lt["A2"].font = Font(italic=True, size=9, color="546E7A")
-        ws_lt.merge_cells("A2:H2")
-        ws_lt.row_dimensions[2].height = 16
-
-        # ── Araç yükleme sırası özeti ────────────────────────────────────────
-        non_empty_bins = [
-            (i, b) for i, b in enumerate(best_plan.bins) if b
-        ]
-        truck_assignments = getattr(best_plan, "truck_assignments", {}) or {}
-        trucks_by_id_lt = {t.get("ID", ""): t for t in trucks}
-
-        ws_lt["A3"] = "Araç Yükleme Sırası:"
-        ws_lt["A3"].font = Font(bold=True, size=10, color=XLSX_HEADER)
-        ws_lt.row_dimensions[3].height = 16
-
-        order_parts = [
-            f"Araç {i + 1}  ({truck_assignments.get(i, f'V{i+1}')})"
-            for i, _ in non_empty_bins
-        ]
-        ws_lt["A4"] = "  →  ".join(order_parts)
-        ws_lt["A4"].font = Font(size=9)
-        ws_lt.merge_cells("A4:H4")
-        ws_lt.row_dimensions[4].height = 16
-
-        # ── Kolon başlıkları tanımı ──────────────────────────────────────────
-        lt_headers = [
-            "Sıra No", "Palet ID", "Boyut G×U×Y (cm)",
-            "Ağırlık (kg)", "Konum (X, Y, Z)", "Müşteri",
-            "Öncelik", "Dikkat Notları",
-        ]
-        lt_col_widths = [10, 18, 20, 13, 18, 18, 10, 24]
-        frag_fill  = PatternFill("solid", fgColor="FFF9C4")   # açık sarı kırılgan
-        truck_hdr_fill = PatternFill("solid", fgColor="0D47A1")
-
-        # Küçük yardımcı: attr yoksa dict'ten al
-        def _gp(pl, attr, default=0):
-            if hasattr(pl, attr):
-                return getattr(pl, attr)
-            if hasattr(pl, "get"):
-                return pl.get(attr, default)
-            return default
-
-        current_row = 6  # 1-4 başlık, 5 boş
-
-        # ── Her araç için ayrı tablo ─────────────────────────────────────────
-        for bin_idx, bin_placements in non_empty_bins:
-            truck_id   = truck_assignments.get(bin_idx, f"V{bin_idx + 1}")
-            truck_dict = trucks_by_id_lt.get(truck_id, {})
-            tw = truck_dict.get("Genişlik (cm)", 0)
-            tl = truck_dict.get("Uzunluk (cm)", 0)
-            th = truck_dict.get("Yükseklik (cm)", 0)
-
-            # Araç başlık satırı (birleştirilmiş)
-            truck_label = (
-                f"  ARAÇ {bin_idx + 1}:  {truck_id}  "
-                f"({tw}×{tl}×{th} cm)  —  {len(bin_placements)} parça"
-            )
-            cell_th = ws_lt.cell(current_row, 1, truck_label)
-            cell_th.font = Font(bold=True, size=11, color="FFFFFF")
-            cell_th.fill = truck_hdr_fill
-            cell_th.alignment = Alignment(horizontal="left", vertical="center")
-            cell_th.border = thin_border
-            ws_lt.merge_cells(
-                start_row=current_row, start_column=1,
-                end_row=current_row, end_column=len(lt_headers),
-            )
-            ws_lt.row_dimensions[current_row].height = 22
-            current_row += 1
-
-            # Kolon başlıkları
-            for c, h in enumerate(lt_headers, 1):
-                style_header(ws_lt.cell(current_row, c, h))
-            ws_lt.row_dimensions[current_row].height = 18
-            current_row += 1
-
-            # Yükleme sırası mantığı:
-            #  1) Y azalan  → en arka satırdan başla (kapıdan uzak = önce yükle)
-            #  2) Z artan   → o satırın alt katmanı önce, üst katmanı hemen ardından
-            #  3) X artan   → aynı Y+Z seviyesinde soldan sağa (tiebreaker)
-            # Böylece: arka alt katman tamamen → arka üst katman → bir sıra ileri →
-            #           yeni satır alt katman → üst katman → … → kapıya yakın son ürün
-            sorted_placements = sorted(
-                bin_placements,
-                key=lambda pl: (
-                    -_gp(pl, "y", 0),   # arka önce
-                     _gp(pl, "z", 0),   # alt katman önce, üst katman hemen ardından
-                     _gp(pl, "x", 0),   # soldan sağa tiebreaker
-                ),
-            )
-
-            for seq, pl in enumerate(sorted_placements, 1):
-                pid = _gp(pl, "piece_id", "—") or "—"
-                px  = _gp(pl, "x", 0)
-                py  = _gp(pl, "y", 0)
-                pz  = _gp(pl, "z", 0)
-                pw  = _gp(pl, "width", 0)
-                pln = _gp(pl, "length", 0)
-                pht = _gp(pl, "height", 0)
-
-                pinfo    = (piece_info or {}).get(pid, {})
-                weight   = pinfo.get("weight", 0) or 0
-                customer = (
-                    pinfo.get("customer", "")
-                    or pinfo.get("Müşteri", "")
-                    or ""
-                )
-                priority = pinfo.get("priority", "") or ""
-                fragile  = bool(
-                    pinfo.get("is_fragile")
-                    or pinfo.get("fragile")
-                )
-                no_top   = bool(
-                    pinfo.get("no_top_load")
-                    or pinfo.get("üstüne_yük_konmasın")
-                )
-
-                notes = []
-                if fragile:
-                    notes.append("⚠ Kırılgan")
-                if no_top:
-                    notes.append("🚫 Üstüne Yük Koyma")
-                if str(priority) == "1":
-                    notes.append("🚪 Kapıya Yakın")
-                note_str = " · ".join(notes) if notes else ""
-
-                row_vals = [
-                    seq,
-                    pid,
-                    f"{pw}×{pln}×{pht}",
-                    round(float(weight), 1),
-                    f"({px}, {py}, {pz})",
-                    str(customer),
-                    str(priority) if priority else "",
-                    note_str,
-                ]
-                even = seq % 2 == 0
-                for c, v in enumerate(row_vals, 1):
-                    cell = ws_lt.cell(current_row, c, v)
-                    style_row(cell, even)
-                    if fragile:
-                        cell.fill = frag_fill
-                current_row += 1
-
-            current_row += 1  # araçlar arası boşluk
-
-        set_col_widths(ws_lt, lt_col_widths)
+        _add_loading_sheet(wb, "Yükleme Talimatı", project_name,
+                           best_plan, trucks, piece_info or {})
 
     # ── Buffer'a yaz ──────────────────────────────────────────────────────────
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+# ============================================================================
+# GENEL RAPOR — koşulan TÜM algoritmalar tek çalışma kitabında
+# ============================================================================
+
+def generate_comparison_excel(
+    project_name:  str,
+    company_name:  str,
+    trucks:        List[dict],
+    pieces:        List[dict],
+    results:       Dict[str, Any],      # {algo: {utilization, placed, ...}}
+    best_algo:     str,
+    plans_by_algo: Dict[str, Any],      # {algo: CuttingPlan3D}
+    piece_info=None,
+) -> bytes:
+    """
+    GENEL BİLGİLENDİRME RAPORU: o koşuda çalıştırılan bütün algoritmalar.
+
+    · "Genel Özet"      — karşılaştırma tablosu (en iyi ★) + doluluk grafiği
+    · Her algoritma için ayrı "Yükleme Talimatı" sayfası (plan detayı)
+    """
+    wb = openpyxl.Workbook()
+    S = _xl_styles()
+
+    def style_header(cell):
+        cell.fill = S["hdr_fill"]; cell.font = S["hdr_font"]
+        cell.alignment = S["center"]; cell.border = S["border"]
+
+    def style_row(cell, even=True, highlight=False):
+        cell.fill = S["accent_fill"] if highlight else (
+            S["sub_fill"] if even else S["white_fill"])
+        cell.font = Font(bold=True, size=9) if highlight else S["norm_font"]
+        cell.alignment = S["center"]; cell.border = S["border"]
+
+    # ── Sayfa 1: Genel Özet ──────────────────────────────────────────────
+    ws = wb.active
+    ws.title = "Genel Özet"
+    ws["A1"] = f"LoadPlan Pro — Genel Karşılaştırma Raporu"
+    ws["A1"].font = Font(bold=True, size=14, color=XLSX_HEADER)
+    ws["A2"] = f"{company_name}  |  Proje: {project_name}"
+    ws["A2"].font = Font(bold=True, size=11)
+    ws["A3"] = (f"Tarih: {datetime.now().strftime('%d.%m.%Y %H:%M')}  |  "
+                f"Koşulan algoritma: {len(results)}  |  En iyi: ★ {best_algo}")
+    ws["A3"].font = Font(italic=True, size=9, color="546E7A")
+
+    headers = ["Algoritma", "Kamyon", "Yerleşen", "Toplam",
+               "Doluluk (%)", "Fire (m³)", "Süre (sn)"]
+    for c, h in enumerate(headers, 1):
+        style_header(ws.cell(5, c, h))
+
+    _sorted = sorted(results.items(),
+                     key=lambda x: (-x[1].get("placed", 0),
+                                    x[1].get("truck_count", 0),
+                                    -x[1].get("utilization", 0)))
+    for i, (algo, r) in enumerate(_sorted, 6):
+        is_best = (algo == best_algo)
+        row_vals = [
+            ("★ " if is_best else "") + algo,
+            r.get("truck_count", "—"),
+            r.get("placed", "—"),
+            r.get("total_req", "—"),
+            round(r.get("utilization", 0), 1),
+            round(r.get("waste_cm3", 0) / 1e6, 3),
+            round(r.get("execution_time", 0), 2),
+        ]
+        for c, v in enumerate(row_vals, 1):
+            style_row(ws.cell(i, c, v), i % 2 == 0, highlight=is_best)
+
+    if len(results) > 1:
+        chart = BarChart()
+        chart.type = "col"
+        chart.title = "Doluluk Oranı Karşılaştırması (%)"
+        chart.y_axis.title = "Doluluk (%)"
+        chart.style = 10
+        chart.width = 16
+        chart.height = 9
+        data = Reference(ws, min_col=5, max_col=5,
+                         min_row=5, max_row=5 + len(results))
+        cats = Reference(ws, min_col=1, min_row=6, max_row=5 + len(results))
+        chart.add_data(data, titles_from_data=True)
+        chart.set_categories(cats)
+        ws.add_chart(chart, f"A{8 + len(results)}")
+
+    for col, w in enumerate([26, 10, 10, 10, 13, 11, 11], 1):
+        ws.column_dimensions[get_column_letter(col)].width = w
+
+    # ── Her algoritma için yükleme talimatı sayfası ──────────────────────
+    _used_names: set = set()
+    for algo, plan in plans_by_algo.items():
+        if plan is None or not getattr(plan, "bins", None):
+            continue
+        sheet = _safe_sheet_name(("★ " if algo == best_algo else "") + algo,
+                                 _used_names)
+        _add_loading_sheet(wb, sheet, project_name, plan, trucks,
+                           piece_info or {})
+
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
@@ -730,20 +850,24 @@ def _make_qr_image(data: str, size_cm: float = 1.2) -> "Optional[object]":
 
 def _compute_loading_order(placements: List[dict]) -> List[int]:
     """
-    Yükleme sırası (fiziksel satır-katman mantığı):
-      1) Y azalan  — en arka satırdan başla (kapıdan uzak = önce yükle)
+    Yükleme sırası (fiziksel satır-katman mantığı).
+
+    EKSEN KONVANSİYONU: Kapı Y = maks (uzunluk) tarafındadır; priority=1
+    bölgesi (y >= 0.70·L) "kapıya en yakın"dır. Yükleme kapıdan yapıldığı
+    için ilk ürün kapıdan EN UZAK noktaya (kabin tarafı, Y=0) yerleşir:
+      1) Y artan   — kabin tarafından başla (kapıdan uzak = önce yükle)
       2) Z artan   — o satırın alt katmanı önce, üst katmanı hemen ardından
       3) X artan   — aynı Y+Z seviyesinde soldan sağa (tiebreaker)
 
-    Sonuç: arka alt katman → arka üst katman → bir sıra ileri →
-           yeni satır alt katman → üst katman → … → kapıya yakın son ürün
+    Sonuç: kabin tarafı alt katman → üst katman → bir sıra kapıya doğru →
+           … → kapıya en yakın (öncelikli) ürün EN SON yüklenir (LIFO).
 
     Returns:
         placements listesinin her elemanı için sıra numarası (1-based) listesi
     """
     indexed = list(enumerate(placements))
     indexed.sort(key=lambda ix: (
-        -(ix[1].get("y", 0)),   # arka önce
+         ix[1].get("y", 0),    # kabin tarafı önce (kapıdan uzak)
          ix[1].get("z", 0),    # alt katman önce
          ix[1].get("x", 0),    # soldan sağa tiebreaker
     ))
@@ -824,7 +948,8 @@ def generate_loading_sheet_pdf(
     # ── YÜKLEME TALİMATI (Önemli Notlar) ────────────────────────────────
     elements.append(Paragraph(
         "📋 <b>Önemli:</b> Parçalar belirtilen sıra ile yüklenmelidir. "
-        "1 numaralı parça aracın <b>en arkasına</b>, son numara <b>kapıya yakın</b> yerleşir. "
+        "1 numaralı parça aracın <b>kapıdan en uzak (kabin) tarafına</b>, "
+        "son numara <b>kapıya en yakın</b> yerleşir. "
         "Kırılgan ve ağır parçalar ayrıca işaretlenmiştir.",
         body
     ))
@@ -886,8 +1011,9 @@ def generate_loading_sheet_pdf(
             notes = []
             if piece_meta.get("is_fragile") or piece_meta.get("fragile"):
                 notes.append("⚠ Kırılgan")
-            if piece_meta.get("priority") == 1:
-                notes.append("🚪 Öncelik")
+            # Excel sayfasıyla tutarlı: priority int VEYA string gelebilir
+            if str(piece_meta.get("priority", "")).strip() == "1":
+                notes.append("🚪 Öncelik — kapıya yakın, EN SON yükle")
             weight = piece_meta.get("weight", 0)
             if weight >= 200:
                 notes.append(f"🏋 {weight:.0f} kg")
@@ -928,7 +1054,7 @@ def generate_loading_sheet_pdf(
 
         # Sayfa altı uyarı
         elements.append(Paragraph(
-            "📌 X = sol-sağ, Y = arka-ön (kapı), Z = alt-üst. "
+            "📌 X = sol-sağ, Y = kabinden (0) kapıya doğru artar, Z = alt-üst. "
             "Tüm ölçüler cm cinsinden.",
             caption
         ))

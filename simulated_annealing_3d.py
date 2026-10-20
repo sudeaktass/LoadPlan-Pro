@@ -215,6 +215,7 @@ def simulated_annealing_3d_optimization(
     reheat_patience: int = 30,           # [KORUNDU] Stagnasyon eşiği
     reheat_factor: float = 2.5,          # [KORUNDU] Reheat çarpanı
     seed: Optional[int] = None,          # Sabit seed → tekrarlanabilir sonuç
+    progress_callback=None,              # (gecen_sure, max_time) — UI ilerleme
 ) -> CuttingPlan3D:
     """
     SA-ACR: Adaptive Cooling + Cycle-Shift + Solution Archive
@@ -289,6 +290,11 @@ def simulated_annealing_3d_optimization(
     op_idx = 0
 
     while time.time() - start_time < max_time:
+        if progress_callback:
+            try:
+                progress_callback(time.time() - start_time, max_time)
+            except Exception:
+                pass
         # ── Markov zinciri ────────────────────────────────────────────
         accepts = 0
         attempts = 0

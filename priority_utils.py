@@ -157,22 +157,24 @@ def priority_violation_penalty(
 # Cozum validasyonu (run() sonunda cagirilir)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def validate_priority(
+def collect_priority_violations(
     bins_list: list,
     piece_info: dict,
     trucks: list,
     truck_assignments: dict,
-    algo_name: str = "Algoritma",
-) -> int:
+) -> list:
     """
-    Cozumdeki oncelik ihlallerini raporlar.
-    Ihlal sayisini dondurur (0 = temiz).
+    Cozumdeki oncelik ihlallerini yapisal liste olarak dondurur.
+    UI'da (show_kpis) uyari paneli olarak gosterilir.
+
+    Returns: [{"bin": int, "piece_id": str, "priority": int,
+               "y_center": float, "expected": (y_min, y_max)}]
     """
     violations = []
     for bin_id, placements in enumerate(bins_list):
         if not placements:
             continue
-        truck_id = truck_assignments.get(bin_id)
+        truck_id = truck_assignments.get(bin_id) if truck_assignments else None
         truck = next((t for t in trucks if t.id == truck_id), None)
         if truck is None:
             continue
@@ -187,15 +189,32 @@ def validate_priority(
             y_min, y_max = get_priority_zone(L, prio)
             item_center_y = pl.y + pl.length / 2
             if not (y_min <= item_center_y <= y_max):
-                violations.append(
-                    f"  - '{pl.piece_id}' (oncelik={prio}) "
-                    f"yanlis bolgede: y_center={item_center_y:.0f} "
-                    f"| beklenen [{y_min}, {y_max}]"
-                )
+                violations.append({
+                    "bin": bin_id, "piece_id": pl.piece_id, "priority": prio,
+                    "y_center": item_center_y, "expected": (y_min, y_max),
+                })
+    return violations
+
+
+def validate_priority(
+    bins_list: list,
+    piece_info: dict,
+    trucks: list,
+    truck_assignments: dict,
+    algo_name: str = "Algoritma",
+) -> int:
+    """
+    Cozumdeki oncelik ihlallerini konsola raporlar.
+    Ihlal sayisini dondurur (0 = temiz).
+    """
+    violations = collect_priority_violations(
+        bins_list, piece_info, trucks, truck_assignments)
     if violations:
         print(f"[!] {algo_name}: {len(violations)} oncelik ihlali:")
         for v in violations:
-            print(v)
+            print(f"  - '{v['piece_id']}' (oncelik={v['priority']}) "
+                  f"yanlis bolgede: y_center={v['y_center']:.0f} "
+                  f"| beklenen [{v['expected'][0]}, {v['expected'][1]}]")
     else:
         print(f"[OK] {algo_name}: oncelik kontrolu temiz")
     return len(violations)

@@ -1,0 +1,46 @@
+﻿problem,algoritma,mod,U_G,yerlesen,parmak_izi,sure_s,tohuma_gore,tohumla_ayni
+1,FFD,tohumsuz,63.4107,86,bd4492275e9ce406,0,,
+1,Greedy,tohumsuz,59.3243,83,611081ca7d40072e,0,,
+1,Layer Building,tohumsuz,79.0779,92,fb4fc5d7a9aad570,0,,
+1,Tabu Search,tohumlu,64.7728,87,3e1490f28368c8bc,0.12,1.36,hayır
+1,Tabu Search,tohumsuz,71.002,78,1599db76f351c5bb,0.04,,
+1,Sim. Annealing,tohumlu,64.7728,87,3e1490f28368c8bc,5.69,1.36,hayır
+1,Sim. Annealing,tohumsuz,71.002,78,1599db76f351c5bb,5.09,,
+1,Genetic,tohumlu,75.5407,91,0af04f730188b254,5.06,12.13,hayır
+1,Genetic,tohumsuz,75.5407,91,0af04f730188b254,5.07,,
+1,Monte Carlo,tohumlu,63.4107,86,bd4492275e9ce406,5.03,0.0,EVET
+1,Monte Carlo,tohumsuz,70.6092,82,83f8685c06057925,5.04,,
+1,Island GA,tohumlu,76.752,93,82c788cb2f8f8d1b,5.0,13.34,hayır
+1,Island GA,tohumsuz,76.752,93,82c788cb2f8f8d1b,5.0,,
+1,Multi-Start SA,tohumlu,63.4107,86,bd4492275e9ce406,8.19,0.0,EVET
+1,Multi-Start SA,tohumsuz,63.4107,86,bd4492275e9ce406,8.22,,
+2,FFD,tohumsuz,85.9383,107,10ab0cd53679286e,0,,
+2,Greedy,tohumsuz,24.77,92,aab1818389ee4f93,0,,
+2,Layer Building,tohumsuz,75.5538,124,5b0becda86f9bb97,0,,
+2,Tabu Search,tohumlu,84.2733,106,9210c6e7e372ba7d,0.14,-1.66,hayır
+2,Tabu Search,tohumsuz,85.9383,107,10ab0cd53679286e,0.11,,
+2,Sim. Annealing,tohumlu,84.2733,106,9210c6e7e372ba7d,6.87,-1.66,hayır
+2,Sim. Annealing,tohumsuz,85.9383,107,10ab0cd53679286e,7.63,,
+2,Genetic,tohumlu,81.3799,126,59fca99cd082a87e,5.14,-4.56,hayır
+2,Genetic,tohumsuz,81.3799,126,59fca99cd082a87e,5.12,,
+2,Monte Carlo,tohumlu,85.9383,107,10ab0cd53679286e,5.05,0.0,EVET
+2,Monte Carlo,tohumsuz,76.7991,121,bcdd45375cba0265,5.06,,
+2,Island GA,tohumlu,81.3799,126,59fca99cd082a87e,5.19,-4.56,hayır
+2,Island GA,tohumsuz,81.3799,126,59fca99cd082a87e,5.18,,
+2,Multi-Start SA,tohumlu,85.9383,107,10ab0cd53679286e,17.19,0.0,EVET
+2,Multi-Start SA,tohumsuz,85.9383,107,10ab0cd53679286e,17.16,,
+3,FFD,tohumsuz,63.8345,80,ca358bbec0c08ebb,0,,
+3,Greedy,tohumsuz,70.6428,91,ae70c568e4b43127,0,,
+3,Layer Building,tohumsuz,75.7354,92,ead4e5944715d4fb,0,,
+3,Tabu Search,tohumlu,60.4148,77,845f8995b3709217,0.13,-3.42,hayır
+3,Tabu Search,tohumsuz,69.3502,82,93022a4e8ba27879,0.04,,
+3,Sim. Annealing,tohumlu,60.4148,77,845f8995b3709217,6.1,-3.42,hayır
+3,Sim. Annealing,tohumsuz,69.3502,82,93022a4e8ba27879,5.39,,
+3,Genetic,tohumlu,74.5215,97,0737bb4ede3e79da,5.08,10.69,hayır
+3,Genetic,tohumsuz,74.5215,97,0737bb4ede3e79da,5.2,,
+3,Monte Carlo,tohumlu,63.8345,80,ca358bbec0c08ebb,5.02,0.0,EVET
+3,Monte Carlo,tohumsuz,66.7262,85,5f8eefbd1943a4e1,5.1,,
+3,Island GA,tohumlu,74.5215,97,0737bb4ede3e79da,5.08,10.69,hayır
+3,Island GA,tohumsuz,74.5215,97,0737bb4ede3e79da,5.2,,
+3,Multi-Start SA,tohumlu,63.8345,80,ca358bbec0c08ebb,11.95,0.0,EVET
+3,Multi-Start SA,tohumsuz,63.8345,80,ca358bbec0c08ebb,11.94,,

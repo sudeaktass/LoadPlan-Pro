@@ -306,62 +306,65 @@ def pack_trial_3d(
     """
     Bir trial'ı EP (Extreme Points) motoru ile yerleştir.
     Diğer tüm metaheuristiklerle AYNI decoder — adil karşılaştırma için.
+
+    DÜZELTME: Eski kod tek "açık bin" tutuyordu — parça mevcut araca
+    sığmayınca yeni araç açılıyor ve ÖNCEKI araçlara bir daha
+    dönülmüyordu. Küçük parçalar yarı boş eski araçlara sığacakken yeni
+    araca gidiyordu; MC diğer algoritmalara karşı yapısal olarak
+    dezavantajlıydı. Artık FFD/GA decoder'ı gibi TÜM açık binler denenir.
     """
-    # [KORUNDU] Mevcut yerleştirme mantığı
     placements_by_bin = {}
     truck_assignments = {}
-    current_bin = 0
+    open_packers = {}          # bin_id → packer
+    truck_used_count = {t.id: 0 for t in trucks}
     unfitted_count = 0
 
     if len(trucks) == 0:
         return {}, {}, len(trial_list)
 
-    current_truck = trucks[0]
-    packer = create_packing_engine(
-        current_truck.width, current_truck.length, current_truck.height,
-        engine='EP', heuristic='CP', truck=current_truck, piece_info=piece_info
-    )
-    placements_by_bin[current_bin] = []
-    truck_assignments[current_bin] = current_truck.id
+    trucks_sorted = sorted(trucks, key=lambda t: t.get_volume())
 
-    for piece_id, w, l, h, rot, piece in trial_list:
+    def _open_new_bin():
+        for truck in trucks_sorted:
+            if truck_used_count[truck.id] < truck.available:
+                bid = len(open_packers)
+                truck_used_count[truck.id] += 1
+                open_packers[bid] = create_packing_engine(
+                    truck.width, truck.length, truck.height,
+                    engine='EP', heuristic='CP',
+                    truck=truck, piece_info=piece_info)
+                placements_by_bin[bid] = []
+                truck_assignments[bid] = truck.id
+                return bid
+        return None
+
+    def _try_place(bid, piece_id, w, l, h):
+        packer = open_packers[bid]
         result = packer.find_best_position_3d(
-            piece_id, w, l, h, allow_rotation=False, respect_gravity=True
-        )
-
+            piece_id, w, l, h, allow_rotation=False, respect_gravity=True)
         if result:
             packer.place_piece_3d(piece_id, result)
             last = packer.placements[-1]
-            last.bin_id = current_bin
-            placements_by_bin[current_bin].append(last)
-        else:
-            truck_found = False
-            for truck in trucks:
-                used_count = sum(1 for tid in truck_assignments.values() if tid == truck.id)
-                if used_count < truck.available:
-                    current_bin += 1
-                    current_truck = truck
-                    packer = create_packing_engine(
-                        truck.width, truck.length, truck.height,
-                        engine='EP', heuristic='CP', truck=truck, piece_info=piece_info
-                    )
-                    placements_by_bin[current_bin] = []
-                    truck_assignments[current_bin] = truck.id
-                    truck_found = True
-                    break
+            last.bin_id = bid
+            placements_by_bin[bid].append(last)
+            return True
+        return False
 
-            if not truck_found:
-                unfitted_count += 1
-                continue
+    if _open_new_bin() is None:
+        return {}, {}, len(trial_list)
 
-            result = packer.find_best_position_3d(piece_id, w, l, h, False, True)
-            if result:
-                packer.place_piece_3d(piece_id, result)
-                last = packer.placements[-1]
-                last.bin_id = current_bin
-                placements_by_bin[current_bin].append(last)
-            else:
-                unfitted_count += 1
+    for piece_id, w, l, h, rot, piece in trial_list:
+        placed = False
+        for bid in list(open_packers.keys()):
+            if _try_place(bid, piece_id, w, l, h):
+                placed = True
+                break
+        if not placed:
+            new_bid = _open_new_bin()
+            if new_bid is not None and _try_place(new_bid, piece_id, w, l, h):
+                placed = True
+        if not placed:
+            unfitted_count += 1
 
     return placements_by_bin, truck_assignments, unfitted_count
 

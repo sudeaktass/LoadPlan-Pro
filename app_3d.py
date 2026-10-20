@@ -6,10 +6,17 @@ Yeni:  Kullanıcı/Şirket oturumu · STEP/STL import · L/T/I profil
        NFP Nested Packing · Proje DB · PDF/Excel rapor
 """
 import sys, io
-# Windows cp1254 terminali emoji içeren print() çağrılarını çöküşten korur
+# Windows cp1254 terminali emoji içeren print() çağrılarını çöküşten korur.
+# Üç durum vardır:
+#   1) Normal terminal      -> stdout'ta reconfigure() vardır
+#   2) Ham bayt akışı       -> reconfigure yok ama .buffer var
+#   3) Yakalanmış çıktı     -> ikisi de yok (ör. Streamlit stdout'u StringIO ile
+#                              değiştirir). Bu durumda akış zaten metindir;
+#                              dokunulmazsa sorun çıkmaz.
+# 3. durum gözden kaçtığı için Streamlit altında AttributeError alınıyordu.
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-else:
+elif hasattr(sys.stdout, "buffer"):
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 
 # matplotlib backend'i pyplot import edilmeden ÖNCE ayarla
@@ -60,11 +67,13 @@ except Exception as _e:
 HAS_TRIMESH = _check_pkg("trimesh")
 HAS_SHAPELY = _check_pkg("shapely")
 
+_REPORTS_ERR = ""
 try:
     from reports import generate_pdf_report, generate_excel_report
     HAS_REPORTS = True
-except ImportError:
+except Exception as _e:
     HAS_REPORTS = False
+    _REPORTS_ERR = str(_e)
 
 import database as db_mod
 
@@ -82,30 +91,33 @@ HAS_BAYESIAN   = False
 HAS_ISLAND_GA  = False
 HAS_MULTISTART = False
 HAS_FLEET_OPT  = False
+# Hata sebepleri saklanır — "özellik yok" ile "modül bozuk" ayırt edilebilsin
+# (eski `except: pass` syntax hatasını bile sessizce yutuyordu).
+_ADV_IMPORT_ERRORS: dict = {}
 
 try:
     from bayesian_optimizer_3d import bayesian_optimization_3d
     HAS_BAYESIAN = True
-except Exception:
-    pass
+except Exception as _e:
+    _ADV_IMPORT_ERRORS["bayesian"] = str(_e)
 
 try:
     from island_genetic_3d import island_model_ga_3d
     HAS_ISLAND_GA = True
-except Exception:
-    pass
+except Exception as _e:
+    _ADV_IMPORT_ERRORS["island_ga"] = str(_e)
 
 try:
     from multistart_sa_3d import multistart_sa_3d
     HAS_MULTISTART = True
-except Exception:
-    pass
+except Exception as _e:
+    _ADV_IMPORT_ERRORS["multistart_sa"] = str(_e)
 
 try:
     from fleet_optimizer_3d import fleet_optimizer_3d
     HAS_FLEET_OPT = True
-except Exception:
-    pass
+except Exception as _e:
+    _ADV_IMPORT_ERRORS["fleet_opt"] = str(_e)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SAYFA YAPISI
@@ -127,8 +139,31 @@ st.markdown("""
 </style>""", unsafe_allow_html=True)
 
 # ── Giriş kontrolü ────────────────────────────────────────────────────────────
-if not is_logged_in():
-    render_login_page()
+# LOADPLAN_GUEST_MODE=1 (varsayılan): giriş ekranı atlanır, gerçek bir
+#   "Misafir" DB hesabıyla çalışılır (FK bütünlüğü korunur, proje kaydı çalışır).
+# LOADPLAN_GUEST_MODE=0: normal giriş zorunlu — ÜRETİM DAĞITIMINDA BU KULLANILMALI.
+_GUEST_MODE = os.getenv("LOADPLAN_GUEST_MODE", "1") == "1"
+
+if not _GUEST_MODE:
+    if not is_logged_in():
+        render_login_page()
+elif not st.session_state.get("user_id"):
+    try:
+        _g_co, _g_user = db_mod.get_or_create_guest()
+        st.session_state["user_id"]    = _g_user.id
+        st.session_state["company_id"] = _g_co.id
+        st.session_state["current_user"] = {
+            "id": _g_user.id, "email": _g_user.email,
+            "full_name": _g_user.full_name, "role": _g_user.role,
+            "company_id": _g_co.id,
+        }
+        st.session_state["current_company"] = {
+            "id": _g_co.id, "name": _g_co.name, "slug": _g_co.slug,
+            "plan": _g_co.plan, "logo_url": _g_co.logo_url,
+        }
+    except Exception as _ge:
+        st.error(f"⚠️ Misafir hesabı oluşturulamadı: {_ge}")
+        st.stop()
 
 user = current_user()
 co   = current_company()
@@ -183,9 +218,9 @@ ALGORITHMS = {
     },
     "bayesian": {
         "name": "🔬 Bayesian Optim.", "time": "60–300 sn", "advanced": True,
-        "desc": "Geçmiş denemelerden öğrenerek akıllıca yeni parametreler dener. Her iterasyonda surrogate model güncellenerek en verimli arama yapılır.",
-        "pros": "En akıllı arama · Az deneme yeter",
-        "cons": "Uzun süre · Yüksek bellek",
+        "desc": "Optuna TPE (Tree-structured Parzen Estimator) ile hiperparametre optimizasyonu: seçilen algoritmanın (GA/SA/Tabu/MC) parametrelerini geçmiş denemelerden öğrenerek akıllıca arar.",
+        "pros": "Akıllı parametre araması · Az deneme yeter",
+        "cons": "Uzun süre · İç algoritmayı defalarca çalıştırır",
     },
     "island_ga": {
         "name": "🏝️ Island GA", "time": "60–300 sn", "advanced": True,
@@ -250,7 +285,7 @@ div[data-testid="stSidebarNav"] {display:none}
         st.session_state.nav_page = "🚀 Optimizasyon"
     for _p in _pages:
         _active = "active" if st.session_state.nav_page == _p else ""
-        if st.button(_p, key=f"nav_{_p}", use_container_width=True):
+        if st.button(_p, key=f"nav_{_p}", width="stretch"):
             st.session_state.nav_page = _p
             st.rerun()
     page = st.session_state.nav_page
@@ -275,7 +310,7 @@ div[data-testid="stSidebarNav"] {display:none}
         # uygular → yazarken sıfırlanma/silinme olur. Düzenlenmiş hali ayrı
         # 'df_trucks_live' anahtarında tutulur (diğer sayfalar bunu okur).
         df_trucks = st.data_editor(st.session_state.df_trucks, num_rows="dynamic",
-            use_container_width=True,
+            width="stretch",
             key="df_trucks_editor",
             column_config={
                 "ID":             st.column_config.TextColumn("ID", required=True),
@@ -351,13 +386,17 @@ div[data-testid="stSidebarNav"] {display:none}
                         break
             else:
                 st.info("İleri düzey dosyalar klasörde bulunamadı.")
+            # Yüklenemeyen modüllerin SEBEBİNİ göster (sessiz maskelenmesin)
+            for _mk, _merr in _ADV_IMPORT_ERRORS.items():
+                if _mk in ("bayesian", "island_ga", "multistart_sa"):
+                    st.caption(f"⚠️ `{_mk}` yüklenemedi: {_merr[:120]}")
 
         else:
             _c1, _c2 = st.columns(2)
-            if _c1.button("✅ Hepsini Seç", use_container_width=True):
+            if _c1.button("✅ Hepsini Seç", width="stretch"):
                 for _k in ALGORITHMS:
                     st.session_state[f"cmp_{_k}"] = True
-            if _c2.button("❌ Hepsini Temizle", use_container_width=True):
+            if _c2.button("❌ Hepsini Temizle", width="stretch"):
                 for _k in ALGORITHMS:
                     st.session_state[f"cmp_{_k}"] = False
 
@@ -389,7 +428,8 @@ div[data-testid="stSidebarNav"] {display:none}
         st.header("⚙️ Parametreler")
         active = [sel_algo] if sel_algo else sel_algos
         ts_time=30; ts_tenure=7; sa_time=30; sa_temp=1000.0; sa_cool=0.995
-        mc_iter=100; ga_pop=50; ga_gen=100; layer_strat="adaptive"
+        mc_iter=100; ga_pop=50; ga_gen=100; ga_time=60; ga_workers=0
+        layer_strat="adaptive"
         nfp_res=2.0; nfp_margin=0.5
 
         # ── Tekrarlanabilirlik: sabit rastgelelik tohumu (seed) ───────────
@@ -413,12 +453,19 @@ div[data-testid="stSidebarNav"] {display:none}
         with st.expander("🧬 Genetic Algorithm", expanded="genetic" in active):
             ga_pop = st.slider("Popülasyon",10,200,50,10)
             ga_gen = st.slider("Nesil",10,500,100,10)
+            ga_time = st.slider("Maks. Süre (sn, 0=sınırsız)", 0, 300, 60, 15,
+                help="Süre dolunca GA erken biter — en iyi bulunan çözüm döner.")
+            ga_workers = st.slider("Paralel işçi (0=kapalı)", 0, 8, 0, 1,
+                help="Birey değerlendirmelerini çok çekirdekte paralel koşar. "
+                     "Sonuç sıralı koşuyla aynıdır; ilk açılışta süreç havuzu "
+                     "kurulumu birkaç saniye sürer. Büyük problemlerde önerilir.")
         with st.expander("🧱 Layer Building", expanded="layer_building" in active):
             layer_strat = st.selectbox("Strateji",["max","adaptive","median"])
 
         # İleri düzey parametre bölümü
         bay_time=120; bay_trials=40; bay_target="auto"
         isl_islands=4; isl_pop=25; isl_gen=80; isl_mig=15
+        isl_time=120; isl_workers=0
         ms_starts=5; ms_time=90
 
         st.markdown("**🔬 İleri Düzey Parametreler**")
@@ -431,6 +478,12 @@ div[data-testid="stSidebarNav"] {display:none}
             isl_pop     = st.slider("Ada Popülasyonu", 10, 60, 25, 5)
             isl_gen     = st.slider("Nesil", 30, 200, 80, 10)
             isl_mig     = st.slider("Göç Aralığı", 5, 30, 15, 5)
+            isl_time    = st.slider("Maks. Süre (sn, 0=sınırsız)", 0, 600, 120, 30,
+                help="Süre dolunca en iyi bulunan çözümle erken biter.")
+            isl_workers = st.slider("Paralel işçi (0=kapalı)", 0, 8, 0, 1,
+                key="isl_wrk",
+                help="Tüm adaların birey değerlendirmelerini çok çekirdekte "
+                     "paralel koşar; sonuç sıralı koşuyla birebir aynıdır.")
         with st.expander("🔁 Multi-Start SA", expanded="multistart_sa" in active):
             ms_starts = st.slider("Başlangıç Noktası", 2, 10, 5, 1)
             ms_time   = st.slider("Toplam Süre (sn)", 30, 300, 90, 15, key="ms_t")
@@ -483,7 +536,8 @@ div[data-testid="stSidebarNav"] {display:none}
                 "Örn: 120sn bütçede ilk 42sn araç seçimine gider."
             )
             if not HAS_FLEET_OPT:
-                st.error("fleet_optimizer_3d.py bulunamadı — toggle devre dışı.")
+                _fo_err = _ADV_IMPORT_ERRORS.get("fleet_opt", "dosya bulunamadı")
+                st.error(f"fleet_optimizer_3d yüklenemedi ({_fo_err[:120]}) — toggle devre dışı.")
                 use_fleet_opt = False
 
     else:  # Diğer sayfalar için varsayılanlar
@@ -493,7 +547,8 @@ div[data-testid="stSidebarNav"] {display:none}
         mode="🎯 Tek"; sel_algo="ffd_ep"; sel_algos=[]
         active=["ffd_ep"]; ts_time=30; ts_tenure=7; sa_time=30; rng_seed=None
         sa_temp=1000.0; sa_cool=0.995; mc_iter=100; ga_pop=50; ga_gen=100
-        layer_strat="max"; nfp_res=2.0; nfp_margin=0.5
+        ga_time=60; ga_workers=0
+        layer_strat="adaptive"; nfp_res=2.0; nfp_margin=0.5
         show_truck=show_grid=show_nfp2d=True; show_weight=False; compact_fwd=True; use_fleet_opt=False
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -738,13 +793,22 @@ def compact_forward(plan, pieces, trucks):
     atlayabildiğinden hatalıydı.)
     """
     from core_3d import (check_collision_with_list, is_within_bounds_3d,
-                         check_support_3d, Placement3D)
+                         check_support_3d, check_stacking_rules,
+                         calculate_xy_overlap_area, Placement3D)
     from priority_utils import get_priority_zone
 
     piece_info = {p.id: p for p in pieces}
 
     def _ok(pl, nx, ny, others, truck):
-        """(nx, ny) konumunun geçerli olup olmadığını döner."""
+        """(nx, ny) konumunun geçerli olup olmadığını döner.
+
+        DÜZELTME: Eski kod yalnızca taşınan parçanın kendi desteğini kontrol
+        ediyordu — parça, üstünde duran yığının altından çekilebiliyor ve
+        üstteki parçalar havada kalıyordu. Artık (1) taşınan parça için
+        istif kuralları (kırılgan/istif ağırlığı) yeniden doğrulanır,
+        (2) taşınan parçanın ÜSTÜNDE duran her parçanın desteği, taşıma
+        sonrası konfigürasyonda yeniden kontrol edilir.
+        """
         tmp = Placement3D(nx, ny, pl.z, pl.width, pl.length, pl.height,
                           pl.piece_id, pl.rotation, pl.bin_id)
         if not is_within_bounds_3d(tmp, truck):
@@ -755,6 +819,26 @@ def compact_forward(plan, pieces, trucks):
                                               min_support_ratio=0.80,
                                               piece_info=piece_info):
             return False
+        # (1) Taşınan parça yeni konumda istif kurallarına uymalı
+        piece = piece_info.get(pl.piece_id)
+        if piece is not None:
+            valid, _ = check_stacking_rules(tmp, piece, others, piece_info)
+            if not valid:
+                return False
+        # (2) Eski konumda bu parçanın üstünde duranlar desteksiz kalmamalı
+        moved_top = pl.z + pl.height
+        for o in others:
+            if abs(o.z - moved_top) >= 1:
+                continue
+            if calculate_xy_overlap_area(
+                    o.x, o.y, o.width, o.length,
+                    pl.x, pl.y, pl.width, pl.length) <= 0:
+                continue   # bu parça taşınanın üstünde durmuyordu
+            new_env = [x for x in others if x is not o] + [tmp]
+            if not check_support_3d(o, new_env,
+                                    min_support_ratio=0.80,
+                                    piece_info=piece_info):
+                return False
         return True
 
     def _slide_y(pl, others, truck):
@@ -823,74 +907,10 @@ def compact_forward(plan, pieces, trucks):
     return plan
 
 
-def build_pieces(df, sw_shapes, custom_profiles, rules_map=None):
-    """
-    rules_map: {piece_id: {"stackable": bool, "fragile": bool, "rotation": bool}}
-    Yük tablosundaki kullanıcı kurallarını Piece3D alanlarına yansıtır.
-    """
-    if rules_map is None:
-        rules_map = {}
-
-    pieces = []
-    for _, row in df.iterrows():
-        try:
-            pid   = str(row["ID"])
-            sh    = str(row.get("Şekil","Dikdörtgen")).strip()
-            shape = "cylinder" if sh == "Silindir" else "box"
-            # Temel değerler — load_rules override ediyorsa onu kullan
-            rule  = rules_map.get(pid, {})
-            p = Piece3D(
-                id=pid, shape=shape,
-                width=int(row["Genişlik (cm)"]),
-                length=int(row["Genişlik (cm)"]) if shape=="cylinder" else int(row["Uzunluk (cm)"]),
-                height=int(row["Yükseklik (cm)"]),
-                quantity=int(row["Adet"]), weight=float(row["Ağırlık (kg)"]),
-                allow_rotation_xy=rule.get("rotation", bool(row.get("Rotasyon XY", True))),
-                # Kırılgan/İstiflenebilir artık yalnızca yük listesi (rules_map) üzerinden gelir
-                is_stackable=rule.get("stackable", True),
-                is_fragile=rule.get("fragile", False),
-                customer_id=str(row.get("Müşteri","")).strip() or None,
-            )
-            if sh in ("L-Profil","T-Profil","I-Profil","Boru","Poligon"):
-                p._shape_type = sh.lower().replace("-","_").replace(" ","_")
-            pieces.append(p)
-        except Exception:
-            continue
-    for sw in sw_shapes:
-        info = sw["info"]
-        qty = int(st.session_state.get(f"swq_{sw['name']}", sw.get("quantity", 1)))
-        wgt = float(st.session_state.get(f"sww_{sw['name']}", sw.get("weight", 0.0)))
-        cst = str(st.session_state.get(f"swc_{sw['name']}", sw.get("customer", "")))
-        rule = rules_map.get(info.name, {})
-        p = Piece3D(id=info.name, shape="box",
-                    width=max(1, round(info.bbox_width)),
-                    length=max(1, round(info.bbox_length)),
-                    height=max(1, round(info.bbox_height)),
-                    quantity=qty, weight=wgt, customer_id=cst or None,
-                    is_stackable=rule.get("stackable", True),
-                    is_fragile=rule.get("fragile", False),
-                    allow_rotation_xy=rule.get("rotation", True))
-        p._shape_type     = info.shape_type
-        p._cross_section  = info.cross_section
-        p._fill_ratio     = info.fill_ratio
-        p._mesh_vertices  = info.mesh_vertices
-        p._mesh_faces     = info.mesh_faces
-        pieces.append(p)
-    for prof in custom_profiles:
-        info = prof["info"]
-        rule = rules_map.get(prof["id"], {})
-        p = Piece3D(id=prof["id"], shape="box",
-                    width=max(1, round(info.bbox_width)),
-                    length=max(1, round(info.bbox_length)),
-                    height=max(1, round(info.bbox_height)),
-                    quantity=prof["quantity"],
-                    weight=prof["weight"], customer_id=prof.get("customer") or None,
-                    is_stackable=rule.get("stackable", True),
-                    is_fragile=rule.get("fragile", False),
-                    allow_rotation_xy=rule.get("rotation", True))
-        p._shape_type=info.shape_type; p._cross_section=info.cross_section
-        p._fill_ratio=info.fill_ratio; pieces.append(p)
-    return pieces
+# NOT: Eski build_pieces() fonksiyonu kaldırıldı — hiçbir yerden çağrılmıyordu
+# (ölü kod) ve clearance/öncelik/geom-fallback içermediği için yanlışlıkla
+# canlandırılması sessiz kural kaybına yol açacaktı. Tek yetkili üretici:
+# build_pieces_from_load_rules().
 
 
 def build_pieces_from_load_rules(load_rules_df: "pd.DataFrame", geom_store: dict):
@@ -948,7 +968,8 @@ def build_pieces_from_load_rules(load_rules_df: "pd.DataFrame", geom_store: dict
                 is_fragile=fragile,
                 customer_id=cst,
             )
-            # Öncelik: 1 = tırın içi (Y=0 yakın), None = kapıya yakın
+            # Öncelik: 1 = kapıya en yakın bölge (y >= 0.70·L, EN SON yüklenir),
+            # None = önceliksiz, her yere gidebilir (bkz. priority_utils)
             _prio_raw = row.get("Öncelik", None)
             p.priority = int(_prio_raw) if _prio_raw is not None and str(_prio_raw).strip() not in ("", "nan", "None") else None
 
@@ -1121,8 +1142,12 @@ def run_algo(key, pieces, trucks, _bypass_phase1=False, **kw):
             ffd_3d_optimization(pieces, trucks, heuristic="CP", engine=eng))
     elif key == "layer_building":
         from layer_building_3d import layer_building_3d_optimization
+        # DÜZELTME: layer_strat UI'da seçiliyordu ama buraya hiç geçmiyordu
+        # (kozmetik parametre) — artık katman derinliği stratejisine bağlı.
         return _ensure_all_placed(
-            layer_building_3d_optimization(pieces, trucks))
+            layer_building_3d_optimization(
+                pieces, trucks,
+                depth_strategy=kw.get("layer_strat", "adaptive")))
     elif key == "tabu_search":
         from ffd_3d import ffd_3d_optimization
         from tabu_search_3d import tabu_search_3d_optimization
@@ -1131,7 +1156,8 @@ def run_algo(key, pieces, trucks, _bypass_phase1=False, **kw):
             tabu_search_3d_optimization(pieces, trucks, initial_solution=init,
                 max_time=kw.get("ts_time",30),
                 tabu_tenure=kw.get("ts_tenure",7), engine=eng,
-                seed=kw.get("seed")))
+                seed=kw.get("seed"),
+                progress_callback=kw.get("progress_cb")))
     elif key == "sa_hybrid":
         from ffd_3d import ffd_3d_optimization
         from simulated_annealing_3d import simulated_annealing_3d_optimization
@@ -1141,7 +1167,8 @@ def run_algo(key, pieces, trucks, _bypass_phase1=False, **kw):
                 max_time=kw.get("sa_time",30),
                 initial_temp=kw.get("sa_temp",1000.0),
                 cooling_rate=kw.get("sa_cool",0.995), engine=eng,
-                seed=kw.get("seed")))
+                seed=kw.get("seed"),
+                progress_callback=kw.get("progress_cb")))
     elif key == "monte_carlo":
         from monte_carlo_3d import monte_carlo_3d_optimization
         from ffd_3d import ffd_3d_optimization as _ffd_mc
@@ -1149,7 +1176,8 @@ def run_algo(key, pieces, trucks, _bypass_phase1=False, **kw):
         return _ensure_all_placed(
             monte_carlo_3d_optimization(pieces, trucks,
                 iterations=kw.get("mc_iter",100), initial_solution=_init_mc,
-                seed=kw.get("seed")))
+                seed=kw.get("seed"),
+                progress_callback=kw.get("progress_cb")))
     elif key == "genetic":
         from genetic_3d import genetic_3d_optimization
         from ffd_3d import ffd_3d_optimization as _ffd_ga
@@ -1159,7 +1187,10 @@ def run_algo(key, pieces, trucks, _bypass_phase1=False, **kw):
                 population_size=kw.get("ga_pop",50),
                 generations=kw.get("ga_gen",100),
                 initial_solution=_init_ga,
-                seed=kw.get("seed")))
+                max_time=kw.get("ga_time", 0) or 0,
+                n_workers=kw.get("ga_workers", 0),
+                seed=kw.get("seed"),
+                progress_callback=kw.get("progress_cb")))
     elif key == "nfp_nested":
         return _ensure_all_placed(
             run_nfp(pieces, trucks, kw.get("nfp_res",2.0), kw.get("nfp_margin",0.5)))
@@ -1172,6 +1203,7 @@ def run_algo(key, pieces, trucks, _bypass_phase1=False, **kw):
                 n_trials=kw.get("bay_trials", 40),
                 time_budget=kw.get("bay_time", 120.0),
                 seed_with_ffd=True,
+                progress_callback=kw.get("progress_cb"),
             ))
     elif key == "island_ga":
         from island_genetic_3d import island_model_ga_3d
@@ -1185,7 +1217,10 @@ def run_algo(key, pieces, trucks, _bypass_phase1=False, **kw):
                 generations=kw.get("isl_gen", 80),
                 migration_interval=kw.get("isl_mig", 15),
                 initial_solution=_init_isl,
+                max_time=kw.get("isl_time", 0) or 0,
+                n_workers=kw.get("isl_workers", 0),
                 seed=kw.get("seed"),
+                progress_callback=kw.get("progress_cb"),
             ))
     elif key == "multistart_sa":
         from multistart_sa_3d import multistart_sa_3d
@@ -1198,6 +1233,7 @@ def run_algo(key, pieces, trucks, _bypass_phase1=False, **kw):
                 time_budget=kw.get("ms_time", 90.0),
                 initial_solution=_init_ms,
                 seed=kw.get("seed"),
+                progress_callback=kw.get("progress_cb"),
             ))
     return None
 
@@ -1379,6 +1415,29 @@ def show_kpis(plan, pieces, trucks=None):
         )
         st.session_state["_overflow_used"] = False   # tek seferlik göster
 
+    # ── Öncelik bölgesi ihlalleri (artık yalnız konsola değil UI'a da) ────────
+    try:
+        from priority_utils import collect_priority_violations
+        _pv = collect_priority_violations(
+            plan.bins, piece_info, trucks or [], plan.truck_assignments or {})
+        if _pv:
+            with st.expander(f"🚚 {len(_pv)} öncelik bölgesi ihlali", expanded=True):
+                st.warning(
+                    "Aşağıdaki öncelikli parçalar hedef bölgelerinin dışına "
+                    "yerleşti (bölge kısıtı soft'tur — algoritma ceza puanına "
+                    "rağmen daha iyi yer bulamadı). Araç/parça düzenini gözden "
+                    "geçirin veya farklı bir algoritma deneyin."
+                )
+                st.dataframe(pd.DataFrame([
+                    {"Araç": v["bin"] + 1, "Parça": v["piece_id"],
+                     "Öncelik": v["priority"],
+                     "Y merkezi (cm)": round(v["y_center"]),
+                     "Beklenen bölge (cm)": f"{v['expected'][0]}–{v['expected'][1]}"}
+                    for v in _pv
+                ]), hide_index=True, width="stretch")
+    except Exception:
+        pass
+
     # ── P1-P5 Yerleştirme Öncelik Özeti (kapalı expander) ────────────────────
     try:
         from placement_guarantee import classify_pieces_p1_p5, build_priority_summary
@@ -1453,7 +1512,7 @@ def show_kpis(plan, pieces, trucks=None):
         if unfitted_rows:
             with st.expander("📋 Yerleştirilemeyen parçalar — detay", expanded=True):
                 _uf_df = pd.DataFrame(unfitted_rows)
-                st.dataframe(_uf_df, hide_index=True, use_container_width=True,
+                st.dataframe(_uf_df, hide_index=True, width="stretch",
                     column_config={
                         "❌ Eksik": st.column_config.NumberColumn("❌ Eksik", format="%d"),
                         "İstenen":  st.column_config.NumberColumn("İstenen",  format="%d"),
@@ -1591,7 +1650,7 @@ def show_3d(plan, pieces, trucks, show_truck, show_grid, show_weight, chart_key=
         bid = dolu[0][0]
         fig = visualize_3d_plan(plan, trucks, pieces, bid, show_truck, show_grid)
         _k = _safe_key(f"chart_{chart_key}_b{bid}")
-        st.plotly_chart(fig, use_container_width=True, key=_k)
+        st.plotly_chart(fig, width="stretch", key=_k)
     else:
         tab_labels = [f"🚛 Araç {i+1} ({len(b)} palet)" for i,b in dolu]
         tabs = st.tabs(tab_labels)
@@ -1599,7 +1658,7 @@ def show_3d(plan, pieces, trucks, show_truck, show_grid, show_weight, chart_key=
             with tab:
                 fig = visualize_3d_plan(plan, trucks, pieces, bid, show_truck, show_grid)
                 _k = _safe_key(f"chart_{chart_key}_t{tidx}_b{bid}")
-                st.plotly_chart(fig, use_container_width=True, key=_k)
+                st.plotly_chart(fig, width="stretch", key=_k)
 
 
 def results_dict_from(all_results, pieces):
@@ -1615,6 +1674,21 @@ def results_dict_from(all_results, pieces):
             "execution_time": plan.execution_time,
         } for name, plan in all_results.items()
     }
+
+
+def plan_rank(plan) -> tuple:
+    """
+    "En iyi algoritma" karşılaştırma anahtarı.
+
+    Salt utilization, daha az parça yerleştirip daha yüksek doluluk gösteren
+    planın kazanmasına izin veriyordu. Sıralama önceliği:
+      1) En çok yerleştirilen parça
+      2) En az kullanılan araç
+      3) En yüksek doluluk
+    """
+    placed = sum(len(b) for b in plan.bins)
+    bins_used = len([b for b in plan.bins if b])
+    return (placed, -bins_used, plan.utilization)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1790,10 +1864,16 @@ if page == "🚀 Optimizasyon":
         # Aynı dosya birden fazla kez eklenebilir — her seferinde yeni staging girdisi
         if up_files and HAS_TRIMESH:
             processed_this_run = set(st.session_state.get("_sw_processed_run", set()))
+            _MAX_MESH_MB = 80   # tek dosya sınırı — devasa mesh parse-DoS önlemi
             for uf in up_files:
                 if uf.file_id in processed_this_run:
                     continue
                 processed_this_run.add(uf.file_id)
+                if getattr(uf, "size", 0) and uf.size > _MAX_MESH_MB * 1024 * 1024:
+                    st.error(f"⛔ **{uf.name}**: {uf.size/1e6:.0f} MB — "
+                             f"tek dosya sınırı {_MAX_MESH_MB} MB. Mesh'i "
+                             f"sadeleştirip tekrar deneyin.")
+                    continue
                 _file_bytes = uf.read()
                 with tempfile.NamedTemporaryFile(suffix=Path(uf.name).suffix, delete=False) as tmp:
                     tmp.write(_file_bytes); tmp_path = tmp.name
@@ -1940,7 +2020,7 @@ if page == "🚀 Optimizasyon":
                         with _col_prev:
                             _png = st.session_state.get(_prev_key)
                             if _png:
-                                st.image(_png, use_container_width=True,
+                                st.image(_png, width="stretch",
                                          caption="Seçili yönelim önizlemesi")
                             else:
                                 st.info("Önizleme üretilemedi.")
@@ -1987,7 +2067,7 @@ if page == "🚀 Optimizasyon":
                     if st.button(
                         "🔄 Güncelle" if is_added else "➕ Parça Listesine Ekle",
                         key=f"stage_add_{idx_s}_{s['name']}",
-                        type="primary", use_container_width=True
+                        type="primary", width="stretch"
                     ):
                         final_name = s["name"]
                         # Staging'deki güncel değerleri kaydet
@@ -2049,7 +2129,7 @@ if page == "🚀 Optimizasyon":
             sw_df = pd.DataFrame(sw_rows)
             sw_edited = st.data_editor(
                 sw_df,
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
                 num_rows="dynamic",
                 disabled=["ID","Dosya","G(cm)","U(cm)","Y(cm)"],
@@ -2159,7 +2239,7 @@ if page == "🚀 Optimizasyon":
                     data=_tpl_bytes,
                     file_name="loadplan_template.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True,
+                    width="stretch",
                     type="primary",
                 )
             else:
@@ -2187,14 +2267,14 @@ if page == "🚀 Optimizasyon":
             # Araçlar önizleme
             if df_t_xl is not None and not df_t_xl.empty:
                 st.markdown(f"**🚛 Araçlar** — {len(df_t_xl)} satır okundu")
-                st.dataframe(df_t_xl, hide_index=True, use_container_width=True)
+                st.dataframe(df_t_xl, hide_index=True, width="stretch")
             elif not xl_errors:
                 st.warning("Araçlar sayfası bulunamadı veya veri yok.")
 
             # Yükler önizleme
             if df_p_xl is not None and not df_p_xl.empty:
                 st.markdown(f"**📦 Yükler** — {len(df_p_xl)} satır okundu")
-                st.dataframe(df_p_xl, hide_index=True, use_container_width=True,
+                st.dataframe(df_p_xl, hide_index=True, width="stretch",
                     column_config={
                         "Altına yerleştirilemez": st.column_config.CheckboxColumn("🚫 Altına"),
                         "Üstüne yerleştirilemez": st.column_config.CheckboxColumn("⛔ Üstüne"),
@@ -2215,7 +2295,7 @@ if page == "🚀 Optimizasyon":
                     ["🔄 Üzerine yaz (mevcut verileri sil)", "➕ Mevcut veriye ekle"],
                     horizontal=True, key="xl_import_mode",
                 )
-                if st.button("✅ İçe Aktarımı Uygula", type="primary", use_container_width=True):
+                if st.button("✅ İçe Aktarımı Uygula", type="primary", width="stretch"):
                     _overwrite = "Üzerine yaz" in _xl_mode
 
                     # Araçlar
@@ -2480,7 +2560,7 @@ if page == "🚀 Optimizasyon":
 
         edited = st.data_editor(
             st.session_state.load_rules,
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             num_rows="dynamic",
             disabled=["Kaynak"],
@@ -2582,7 +2662,7 @@ if page == "🚀 Optimizasyon":
     with btn_col:
         btn_label = (f"🚀 {ALGORITHMS.get(sel_algo,{}).get('name',sel_algo)} Çalıştır"
                      if mode=="🎯 Tek" else f"📊 {len(sel_algos)} Algoritma Karşılaştır")
-        run_btn = st.button(btn_label, type="primary", use_container_width=True)
+        run_btn = st.button(btn_label, type="primary", width="stretch")
 
         # ⚡ Optimizasyon (iteratif otomatik motor) projeden kaldırıldı.
         # Yalnızca manuel algoritma çalıştırma/karşılaştırma kullanılır.
@@ -2632,15 +2712,28 @@ if page == "🚀 Optimizasyon":
         if not run_list:
             st.warning("⚠️ En az bir algoritma seçin."); st.stop()
         all_results = {}
+        # ── ARTIMLI KALICILIK: sonuç sözlüğü koşu BAŞINDA session_state'e
+        # bağlanır; her algoritma bittiğinde otomatik birikir. Böylece uzun
+        # karşılaştırmalı koşu sırasında bir widget-rerun'u tamamlanan
+        # algoritmaların sonuçlarını kaybettirmez.
+        st.session_state["last_results"]      = all_results
+        st.session_state["last_pieces_3d"]    = pieces_3d
+        st.session_state["last_trucks_3d"]    = trucks_3d
+        st.session_state["last_mode"]         = mode
+        st.session_state["last_project_name"] = project_name or "rapor"
+
         prog = st.progress(0); stat = st.empty()
+        algo_prog = st.progress(0.0)   # algoritma-İÇİ ilerleme (callback'li)
 
         _algo_kw = dict(
             ts_time=ts_time, ts_tenure=ts_tenure,
             sa_time=sa_time, sa_temp=sa_temp, sa_cool=sa_cool,
             mc_iter=mc_iter, ga_pop=ga_pop, ga_gen=ga_gen,
+            ga_time=ga_time, ga_workers=ga_workers,
             layer_strat=layer_strat, nfp_res=nfp_res, nfp_margin=nfp_margin,
             bay_time=bay_time, bay_trials=bay_trials, bay_target=bay_target,
             isl_islands=isl_islands, isl_pop=isl_pop, isl_gen=isl_gen, isl_mig=isl_mig,
+            isl_time=isl_time, isl_workers=isl_workers,
             ms_starts=ms_starts, ms_time=ms_time,
             seed=rng_seed,
         )
@@ -2648,8 +2741,19 @@ if page == "🚀 Optimizasyon":
         for idx, akey in enumerate(run_list):
             stat.info(f"⏳ {ALGORITHMS[akey]['name']} çalışıyor… ({idx+1}/{len(run_list)})")
             prog.progress(idx / len(run_list))
+            algo_prog.progress(0.0)
+
+            def _algo_cb(cur, total, *rest):
+                """Algoritma-içi ilerleme (GA/MC/Island/MS/Bayes/Tabu/SA)."""
+                try:
+                    algo_prog.progress(min(max(cur / max(total, 1), 0.0), 1.0))
+                except Exception:
+                    pass
+
             try:
-                plan = run_algo_with_validation(akey, pieces_3d, trucks_3d, **_algo_kw)
+                plan = run_algo_with_validation(
+                    akey, pieces_3d, trucks_3d,
+                    progress_cb=_algo_cb, **_algo_kw)
                 if plan:
                     # Seçilen araçlara sığmayan parça varsa → tam filo ile tekrar dene
                     _total_req = sum(p.quantity for p in pieces_3d)
@@ -2670,33 +2774,31 @@ if page == "🚀 Optimizasyon":
                     if compact_fwd:
                         try:
                             plan = compact_forward(plan, pieces_3d, trucks_3d)
-                        except Exception:
-                            pass
+                        except Exception as _cfe:
+                            st.warning(f"⚠️ Öne sıkıştırma atlandı "
+                                       f"({ALGORITHMS[akey]['name']}): {_cfe}")
                     all_results[ALGORITHMS[akey]["name"]] = plan
             except Exception as e:
                 st.warning(f"⚠️ {ALGORITHMS[akey]['name']}: {e}")
 
-        prog.progress(1.0); stat.empty(); prog.empty()
+        prog.progress(1.0); stat.empty(); prog.empty(); algo_prog.empty()
         if not all_results:
             st.error("❌ Hiçbir algoritma tamamlanamadı!"); st.stop()
 
-        # Sonuçları session_state'e kaydet
-        st.session_state["last_results"]   = all_results
-        st.session_state["last_pieces_3d"] = pieces_3d
-        st.session_state["last_trucks_3d"] = trucks_3d
-        st.session_state["last_mode"]      = mode
+        # (Sonuçlar koşu başında session_state'e bağlandı — artımlı birikti.)
+        try:
+            _rdict_tmp  = results_dict_from(all_results, pieces_3d)
+            _best_tmp   = max(all_results, key=lambda k: plan_rank(all_results[k]))
+            st.session_state["last_rdict"]     = _rdict_tmp
+            st.session_state["last_best_name"] = _best_tmp
+        except Exception:
+            pass
 
-        # Görsel önbellekleme
-        _fig_cache = {}
-        for _akey_c, _plan_c in all_results.items():
-            for _bid_c, _bpl_c in enumerate(_plan_c.bins):
-                if _bpl_c:
-                    try:
-                        _fig_cache[(_akey_c, _bid_c)] = visualize_3d_plan(
-                            _plan_c, trucks_3d, pieces_3d, _bid_c, show_truck, show_grid)
-                    except Exception:
-                        pass
-        st.session_state["last_fig_cache"] = _fig_cache
+        # Görsel önbellek: EAGER üretim kaldırıldı — tüm algoritma × araç
+        # figürlerini peşinen üretmek hem koşuyu uzatıyor hem yüzlerce MB
+        # bellek tutuyordu. Figürler artık ilk görüntülemede üretilip
+        # sınırlı boyutlu önbelleğe alınır (aşağıda _cached_fig).
+        st.session_state["last_fig_cache"] = {}
 
         # Yerleştirilemeyen parça uyarısı
         total_req = sum(p.quantity for p in pieces_3d)
@@ -2715,7 +2817,7 @@ if page == "🚀 Optimizasyon":
         # Proje kaydet + rapor (ikincil — hata olsa da çalıştırma bozulmaz)
         try:
             rdict = results_dict_from(all_results, pieces_3d)
-            best_name = max(all_results, key=lambda k: all_results[k].utilization)
+            best_name = max(all_results, key=lambda k: plan_rank(all_results[k]))
             if project_name:
                 proj = db_mod.create_project(co["id"], user["id"], project_name, project_desc)
                 db_mod.save_project_data(
@@ -2726,7 +2828,9 @@ if page == "🚀 Optimizasyon":
                     results=rdict)
                 st.info(f"💾 Proje kaydedildi: **{project_name}**")
         except Exception as _pe:
-            pass
+            # Sessiz yutma YOK: kullanıcı kaydın başarısız olduğunu görmeli
+            st.warning(f"⚠️ Proje veritabanına kaydedilemedi: {_pe} — "
+                       "sonuçlar bu oturumda kullanılabilir durumda.")
 
         st.rerun()
 
@@ -2741,18 +2845,27 @@ if page == "🚀 Optimizasyon" and "last_results" in st.session_state:
     _trucks_3d   = st.session_state["last_trucks_3d"]
     _last_mode   = st.session_state["last_mode"]
     _is_cmp      = (_last_mode == "📊 Karşılaştırmalı")
-    _fig_cache   = st.session_state.get("last_fig_cache", {})
+    _fig_cache   = st.session_state.setdefault("last_fig_cache", {})
+
+    _FIG_CACHE_MAX = 24   # bellek sınırı: en fazla bu kadar figür tutulur
 
     def _cached_fig(aname, bid):
-        if (aname, bid) in _fig_cache:
-            return _fig_cache[(aname, bid)]
-        return visualize_3d_plan(
+        """Tembel figür üretimi + sınırlı önbellek (LRU-vari basit tahliye)."""
+        key = (aname, bid)
+        if key in _fig_cache:
+            return _fig_cache[key]
+        fig = visualize_3d_plan(
             _all_results[aname], _trucks_3d, _pieces_3d, bid, show_truck, show_grid)
+        if fig is not None:
+            if len(_fig_cache) >= _FIG_CACHE_MAX:
+                _fig_cache.pop(next(iter(_fig_cache)))   # en eskiyi at
+            _fig_cache[key] = fig
+        return fig
 
     def _show_3d_fast(aname, bid, plotly_key):
         fig = _cached_fig(aname, bid)
         if fig:
-            st.plotly_chart(fig, use_container_width=True, key=plotly_key)
+            st.plotly_chart(fig, width="stretch", key=plotly_key)
         else:
             st.info(f"⚠️ '{aname}' / Araç {bid+1} için görsel üretilemedi.")
 
@@ -2765,7 +2878,7 @@ if page == "🚀 Optimizasyon" and "last_results" in st.session_state:
         return clean
 
     # ── 🏆 EN İYİ TEK SONUÇ KARTI ─────────────────────────────────────────
-    _best_name = max(_all_results, key=lambda k: _all_results[k].utilization)
+    _best_name = max(_all_results, key=lambda k: plan_rank(_all_results[k]))
     _best_plan = _all_results[_best_name]
     _best_placed = sum(len(b) for b in _best_plan.bins)
     _best_total  = sum(p.quantity for p in _pieces_3d)
@@ -2840,7 +2953,7 @@ if page == "🚀 Optimizasyon" and "last_results" in st.session_state:
             "Ağırlık (kg)":f"{v['total_weight']:,.0f}",
             "Süre (sn)":   round(v["execution_time"], 2),
         } for k,v in _comp_rows])
-        st.dataframe(_cdf, hide_index=True, use_container_width=True,
+        st.dataframe(_cdf, hide_index=True, width="stretch",
             column_config={
                 "Doluluk (%)": st.column_config.ProgressColumn(
                     "Doluluk (%)", min_value=0, max_value=100, format="%.1f%%"),
@@ -2902,60 +3015,108 @@ if page == "🚀 Optimizasyon" and "last_results" in st.session_state:
 
         st.markdown("---")
         st.subheader("📥 Rapor İndir")
-        _r1, _r2, _r3 = st.columns(3)
+
+        # ── Detay çıktılar için algoritma seçimi ─────────────────────────
+        # Karşılaştırmalı analizde kullanıcı yalnız en iyinin değil,
+        # İSTEDİĞİ algoritmanın plan detayını (Excel talimatı + sürücü PDF)
+        # indirebilir. Yönetim PDF'i ve Genel Rapor her zaman tümünü içerir.
+        _algo_opts = list(_all_results.keys())
+        _def_idx   = _algo_opts.index(_best_nm) if _best_nm in _algo_opts else 0
+        if len(_algo_opts) > 1:
+            _report_algo = st.selectbox(
+                "🧾 Detay çıktıların algoritması (Excel & Sürücü Talimatı)",
+                _algo_opts, index=_def_idx, key="report_algo_sel",
+                help="🏆 = koşunun en iyisi. Yönetim PDF'i ve Genel Rapor "
+                     "her zaman TÜM algoritmaları içerir.",
+                format_func=lambda a: ("🏆 " if a == _best_nm else "") + a)
+        else:
+            _report_algo = _algo_opts[_def_idx] if _algo_opts else _best_nm
+        _report_plan = _all_results.get(_report_algo)
+        _algo_slug   = "".join(c if c.isalnum() else "_"
+                               for c in _report_algo)[:20]
+
+        _xl_pinfo = {
+            p.id: {
+                "weight":     getattr(p, "weight",     0),
+                "is_fragile": getattr(p, "is_fragile", False),
+                "no_top_load":getattr(p, "no_top_load", False),
+                "priority":   getattr(p, "priority",   None),
+                "customer":   getattr(p, "customer",   ""),
+            }
+            for p in _pieces_3d
+        }
+
+        _r1, _r2, _r3, _r4 = st.columns(4)
         try:
             _pdf_b = generate_pdf_report(_proj_nm, _co_nm, _trucks_d, _pieces_d,
                                          _rdict, _best_nm, {}, user["full_name"])
             _r1.download_button("📄 Yönetim Raporu (PDF)", _pdf_b,
                 file_name=f"{_proj_nm}_yonetim_{time.strftime('%Y%m%d')}.pdf",
-                mime="application/pdf", use_container_width=True, key="dl_pdf_main")
+                mime="application/pdf", width="stretch", key="dl_pdf_main",
+                help="Tüm algoritmaların karşılaştırması + en iyi sonucun özeti")
         except Exception:
-            _r1.button("📄 PDF (hata)", disabled=True, use_container_width=True)
+            _r1.button("📄 PDF (hata)", disabled=True, width="stretch")
         try:
-            _xl_pinfo = {
-                p.id: {
-                    "weight":     getattr(p, "weight",     0),
-                    "is_fragile": getattr(p, "is_fragile", False),
-                    "no_top_load":getattr(p, "no_top_load", False),
-                    "priority":   getattr(p, "priority",   None),
-                    "customer":   getattr(p, "customer",   ""),
-                }
-                for p in _pieces_3d
-            }
             _xl_b = generate_excel_report(
                 _proj_nm, _co_nm, _trucks_d, _pieces_d,
-                _rdict, _best_nm,
+                _rdict, _report_algo,
                 load_rules_df=st.session_state.get("load_rules_live",
                     st.session_state.get("load_rules")),
-                best_plan=_all_results.get(_best_nm),
+                best_plan=_report_plan,
                 piece_info=_xl_pinfo,
             )
-            _r2.download_button("📊 Excel İndir", _xl_b,
-                file_name=f"{_proj_nm}_{time.strftime('%Y%m%d')}.xlsx",
+            _r2.download_button(f"📊 Excel — {_report_algo[:14]}", _xl_b,
+                file_name=f"{_proj_nm}_{_algo_slug}_{time.strftime('%Y%m%d')}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True, key="dl_xl_main")
+                width="stretch", key="dl_xl_main",
+                help=f"Seçilen algoritmanın ({_report_algo}) plan detayı ve "
+                     "yükleme talimatı")
         except Exception:
-            _r2.button("📊 Excel (hata)", disabled=True, use_container_width=True)
+            _r2.button("📊 Excel (hata)", disabled=True, width="stretch")
         try:
             from reports import generate_loading_sheet_pdf, build_bins_data_from_plan
-            _best_plan_r = _all_results[_best_nm]
+            _best_plan_r = _report_plan
             _bins_r      = build_bins_data_from_plan(_best_plan_r, _trucks_3d)
             _pinfo_r     = {p.id: {"name": p.id, "weight": p.weight,
                                    "is_fragile": p.is_fragile, "priority": p.priority}
                             for p in _pieces_3d}
+            # QR prefix: proje adı + tarih-saat → iki "Yeni Proje" çakışmaz
             _loading_pdf = generate_loading_sheet_pdf(
                 _proj_nm, _co_nm, _bins_r, _pinfo_r,
-                include_qr=True, qr_prefix=f"LP-{_proj_nm[:8]}")
+                include_qr=True,
+                qr_prefix=f"LP-{_proj_nm[:8]}-{time.strftime('%Y%m%d%H%M')}")
             _r3.download_button("🚛 Sürücü Talimatı (QR)", _loading_pdf,
-                file_name=f"{_proj_nm}_surucu_{time.strftime('%Y%m%d')}.pdf",
-                mime="application/pdf", use_container_width=True, key="dl_surucu_main")
+                file_name=f"{_proj_nm}_{_algo_slug}_surucu_{time.strftime('%Y%m%d')}.pdf",
+                mime="application/pdf", width="stretch", key="dl_surucu_main",
+                help=f"Seçilen algoritmanın ({_report_algo}) sürücü talimatı")
         except ImportError:
             _r3.button("🚛 Sürücü Talimatı", disabled=True,
                        help="qrcode kütüphanesi gerekli: pip install qrcode[pil]",
-                       use_container_width=True)
+                       width="stretch")
         except Exception as _re:
             _r3.button("🚛 Sürücü Talimatı (hata)", disabled=True,
-                       help=f"Hata: {_re}", use_container_width=True)
+                       help=f"Hata: {_re}", width="stretch")
+
+        # ── GENEL RAPOR: koşulan TÜM algoritmalar tek dosyada ────────────
+        if len(_all_results) > 1:
+            try:
+                from reports import generate_comparison_excel
+                _cmp_b = generate_comparison_excel(
+                    _proj_nm, _co_nm, _trucks_d, _pieces_d,
+                    _rdict, _best_nm, _all_results, piece_info=_xl_pinfo)
+                _r4.download_button(
+                    f"🧾 Genel Rapor ({len(_all_results)} algoritma)", _cmp_b,
+                    file_name=f"{_proj_nm}_genel_{time.strftime('%Y%m%d')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    width="stretch", key="dl_genel_main",
+                    help="Karşılaştırma özeti + her algoritma için ayrı "
+                         "yükleme talimatı sayfası")
+            except Exception as _ce:
+                _r4.button("🧾 Genel Rapor (hata)", disabled=True,
+                           help=f"Hata: {_ce}", width="stretch")
+        else:
+            _r4.caption("🧾 Genel Rapor: karşılaştırmalı modda "
+                        "(≥2 algoritma) aktif olur.")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2988,10 +3149,13 @@ elif page == "📁 Projelerim":
                         {"Algoritma":k,"Doluluk":f'%{v.get("utilization",0):.1f}',
                          "Kamyon":v.get("truck_count","—"),
                          "Süre":f'{v.get("execution_time",0):.2f}s'} for k,v in res.items()
-                    ]), hide_index=True, use_container_width=True)
+                    ]), hide_index=True, width="stretch")
                 cd,ca = st.columns(2)
-                if cd.button("🗑️ Sil",    key=f"del_{p.id}"): db_mod.delete_project(p.id); st.rerun()
-                if ca.button("📦 Arşivle",key=f"arc_{p.id}"): db_mod.archive_project(p.id); st.rerun()
+                # company_id ile kapsamlı — başka şirketin projesi hedeflenemez
+                if cd.button("🗑️ Sil",    key=f"del_{p.id}"):
+                    db_mod.delete_project(p.id, company_id=co["id"]); st.rerun()
+                if ca.button("📦 Arşivle",key=f"arc_{p.id}"):
+                    db_mod.archive_project(p.id, company_id=co["id"]); st.rerun()
                 if HAS_REPORTS and res:
                     pdf_b = generate_pdf_report(p.name, co.get("name",""),
                                 p.get_trucks(), p.get_pieces(), res,
@@ -3025,7 +3189,7 @@ elif page == "⚙️ Şirket Ayarları":
             "Ad Soyad":u.full_name,"E-posta":u.email,
             "Rol":u.role,"Aktif":"✅" if u.is_active else "❌",
             "Son Giriş":u.last_login.strftime("%d.%m.%Y") if u.last_login else "—"
-        } for u in users_list]), hide_index=True, use_container_width=True)
+        } for u in users_list]), hide_index=True, width="stretch")
 
         if user["role"] == "admin":
             st.markdown("---"); st.subheader("➕ Kullanıcı Ekle")
@@ -3072,7 +3236,7 @@ elif page == "⚙️ Şirket Ayarları":
             col1, col2 = st.columns([1, 3])
             with col1:
                 if st.button("▶️ Yedek Al", type="primary",
-                             use_container_width=True):
+                             width="stretch"):
                     with st.spinner("Yedek alınıyor..."):
                         result = run_backup_now()
                     if result["ok"]:
@@ -3105,7 +3269,7 @@ elif page == "⚙️ Şirket Ayarları":
                     "Tarih": b["created"].strftime("%d.%m.%Y %H:%M"),
                     "Boyut (KB)": b["size_kb"],
                 } for b in backups[:20]])
-                st.dataframe(df_backup, hide_index=True, use_container_width=True)
+                st.dataframe(df_backup, hide_index=True, width="stretch")
                 if len(backups) > 20:
                     st.caption(f"…ve {len(backups) - 20} eski yedek daha")
 

@@ -1,0 +1,398 @@
+{
+  "ornek_id": "geo_p050_r4",
+  "uretim_zamani": "2026-09-08T17:01:20",
+  "config_dosyasi": "pilot_geometri.yaml",
+  "seed": 7303,
+  "hedef_silindir_hacim_payi": 0.5,
+  "ulasilan_silindir_hacim_payi": 0.4925,
+  "silindir_adedi": 22,
+  "parca_sayisi": 40,
+  "sikilik": {
+    "T_V": 0.548,
+    "T_W": 0.0796,
+    "yuk_gercek_hacim_cm3": 96271070.7611,
+    "yuk_bbox_hacim_cm3": 107647421,
+    "filo_hacim_cm3": 175680000,
+    "filo_kapasite_kg": 144000
+  },
+  "filo": [
+    {
+      "id": "Buyuk",
+      "genislik": 240,
+      "uzunluk": 600,
+      "yukseklik": 200,
+      "kapasite_kg": 24000,
+      "adet": 4
+    },
+    {
+      "id": "Orta",
+      "genislik": 240,
+      "uzunluk": 420,
+      "yukseklik": 200,
+      "kapasite_kg": 16000,
+      "adet": 3
+    }
+  ],
+  "parcalar": [
+    {
+      "id": "SIL-001",
+      "sekil": "silindir",
+      "genislik": 90,
+      "uzunluk": 90,
+      "yukseklik": 179,
+      "agirlik": 219,
+      "adet": 1
+    },
+    {
+      "id": "SIL-002",
+      "sekil": "silindir",
+      "genislik": 179,
+      "uzunluk": 179,
+      "yukseklik": 179,
+      "agirlik": 190,
+      "adet": 1
+    },
+    {
+      "id": "SIL-003",
+      "sekil": "silindir",
+      "genislik": 119,
+      "uzunluk": 119,
+      "yukseklik": 179,
+      "agirlik": 323,
+      "adet": 1
+    },
+    {
+      "id": "SIL-004",
+      "sekil": "silindir",
+      "genislik": 179,
+      "uzunluk": 179,
+      "yukseklik": 119,
+      "agirlik": 270,
+      "adet": 1
+    },
+    {
+      "id": "SIL-005",
+      "sekil": "silindir",
+      "genislik": 149,
+      "uzunluk": 149,
+      "yukseklik": 90,
+      "agirlik": 424,
+      "adet": 1
+    },
+    {
+      "id": "SIL-006",
+      "sekil": "silindir",
+      "genislik": 119,
+      "uzunluk": 119,
+      "yukseklik": 179,
+      "agirlik": 245,
+      "adet": 1
+    },
+    {
+      "id": "SIL-007",
+      "sekil": "silindir",
+      "genislik": 90,
+      "uzunluk": 90,
+      "yukseklik": 90,
+      "agirlik": 87,
+      "adet": 1
+    },
+    {
+      "id": "SIL-008",
+      "sekil": "silindir",
+      "genislik": 119,
+      "uzunluk": 119,
+      "yukseklik": 119,
+      "agirlik": 306,
+      "adet": 1
+    },
+    {
+      "id": "SIL-009",
+      "sekil": "silindir",
+      "genislik": 119,
+      "uzunluk": 119,
+      "yukseklik": 149,
+      "agirlik": 262,
+      "adet": 1
+    },
+    {
+      "id": "SIL-010",
+      "sekil": "silindir",
+      "genislik": 149,
+      "uzunluk": 149,
+      "yukseklik": 90,
+      "agirlik": 466,
+      "adet": 1
+    },
+    {
+      "id": "SIL-011",
+      "sekil": "silindir",
+      "genislik": 90,
+      "uzunluk": 90,
+      "yukseklik": 119,
+      "agirlik": 347,
+      "adet": 1
+    },
+    {
+      "id": "SIL-012",
+      "sekil": "silindir",
+      "genislik": 179,
+      "uzunluk": 179,
+      "yukseklik": 149,
+      "agirlik": 250,
+      "adet": 1
+    },
+    {
+      "id": "SIL-013",
+      "sekil": "silindir",
+      "genislik": 119,
+      "uzunluk": 119,
+      "yukseklik": 90,
+      "agirlik": 467,
+      "adet": 1
+    },
+    {
+      "id": "SIL-014",
+      "sekil": "silindir",
+      "genislik": 90,
+      "uzunluk": 90,
+      "yukseklik": 179,
+      "agirlik": 495,
+      "adet": 1
+    },
+    {
+      "id": "SIL-015",
+      "sekil": "silindir",
+      "genislik": 179,
+      "uzunluk": 179,
+      "yukseklik": 90,
+      "agirlik": 276,
+      "adet": 1
+    },
+    {
+      "id": "SIL-016",
+      "sekil": "silindir",
+      "genislik": 119,
+      "uzunluk": 119,
+      "yukseklik": 149,
+      "agirlik": 86,
+      "adet": 1
+    },
+    {
+      "id": "SIL-017",
+      "sekil": "silindir",
+      "genislik": 149,
+      "uzunluk": 149,
+      "yukseklik": 90,
+      "agirlik": 355,
+      "adet": 1
+    },
+    {
+      "id": "SIL-018",
+      "sekil": "silindir",
+      "genislik": 90,
+      "uzunluk": 90,
+      "yukseklik": 119,
+      "agirlik": 392,
+      "adet": 1
+    },
+    {
+      "id": "SIL-019",
+      "sekil": "silindir",
+      "genislik": 90,
+      "uzunluk": 90,
+      "yukseklik": 119,
+      "agirlik": 269,
+      "adet": 1
+    },
+    {
+      "id": "SIL-020",
+      "sekil": "silindir",
+      "genislik": 179,
+      "uzunluk": 179,
+      "yukseklik": 179,
+      "agirlik": 129,
+      "adet": 1
+    },
+    {
+      "id": "SIL-021",
+      "sekil": "silindir",
+      "genislik": 149,
+      "uzunluk": 149,
+      "yukseklik": 90,
+      "agirlik": 172,
+      "adet": 1
+    },
+    {
+      "id": "SIL-022",
+      "sekil": "silindir",
+      "genislik": 149,
+      "uzunluk": 149,
+      "yukseklik": 149,
+      "agirlik": 123,
+      "adet": 1
+    },
+    {
+      "id": "KUT-023",
+      "sekil": "kutu",
+      "genislik": 90,
+      "uzunluk": 119,
+      "yukseklik": 149,
+      "agirlik": 399,
+      "adet": 1
+    },
+    {
+      "id": "KUT-024",
+      "sekil": "kutu",
+      "genislik": 90,
+      "uzunluk": 119,
+      "yukseklik": 179,
+      "agirlik": 202,
+      "adet": 1
+    },
+    {
+      "id": "KUT-025",
+      "sekil": "kutu",
+      "genislik": 179,
+      "uzunluk": 239,
+      "yukseklik": 119,
+      "agirlik": 123,
+      "adet": 1
+    },
+    {
+      "id": "KUT-026",
+      "sekil": "kutu",
+      "genislik": 179,
+      "uzunluk": 119,
+      "yukseklik": 90,
+      "agirlik": 430,
+      "adet": 1
+    },
+    {
+      "id": "KUT-027",
+      "sekil": "kutu",
+      "genislik": 149,
+      "uzunluk": 179,
+      "yukseklik": 149,
+      "agirlik": 380,
+      "adet": 1
+    },
+    {
+      "id": "KUT-028",
+      "sekil": "kutu",
+      "genislik": 179,
+      "uzunluk": 179,
+      "yukseklik": 119,
+      "agirlik": 181,
+      "adet": 1
+    },
+    {
+      "id": "KUT-029",
+      "sekil": "kutu",
+      "genislik": 119,
+      "uzunluk": 179,
+      "yukseklik": 149,
+      "agirlik": 468,
+      "adet": 1
+    },
+    {
+      "id": "KUT-030",
+      "sekil": "kutu",
+      "genislik": 179,
+      "uzunluk": 149,
+      "yukseklik": 90,
+      "agirlik": 357,
+      "adet": 1
+    },
+    {
+      "id": "KUT-031",
+      "sekil": "kutu",
+      "genislik": 90,
+      "uzunluk": 239,
+      "yukseklik": 119,
+      "agirlik": 325,
+      "adet": 1
+    },
+    {
+      "id": "KUT-032",
+      "sekil": "kutu",
+      "genislik": 119,
+      "uzunluk": 149,
+      "yukseklik": 90,
+      "agirlik": 369,
+      "adet": 1
+    },
+    {
+      "id": "KUT-033",
+      "sekil": "kutu",
+      "genislik": 179,
+      "uzunluk": 239,
+      "yukseklik": 149,
+      "agirlik": 223,
+      "adet": 1
+    },
+    {
+      "id": "KUT-034",
+      "sekil": "kutu",
+      "genislik": 90,
+      "uzunluk": 179,
+      "yukseklik": 149,
+      "agirlik": 271,
+      "adet": 1
+    },
+    {
+      "id": "KUT-035",
+      "sekil": "kutu",
+      "genislik": 149,
+      "uzunluk": 149,
+      "yukseklik": 119,
+      "agirlik": 244,
+      "adet": 1
+    },
+    {
+      "id": "KUT-036",
+      "sekil": "kutu",
+      "genislik": 149,
+      "uzunluk": 179,
+      "yukseklik": 119,
+      "agirlik": 154,
+      "adet": 1
+    },
+    {
+      "id": "KUT-037",
+      "sekil": "kutu",
+      "genislik": 90,
+      "uzunluk": 239,
+      "yukseklik": 149,
+      "agirlik": 409,
+      "adet": 1
+    },
+    {
+      "id": "KUT-038",
+      "sekil": "kutu",
+      "genislik": 119,
+      "uzunluk": 179,
+      "yukseklik": 119,
+      "agirlik": 112,
+      "adet": 1
+    },
+    {
+      "id": "KUT-039",
+      "sekil": "kutu",
+      "genislik": 90,
+      "uzunluk": 179,
+      "yukseklik": 179,
+      "agirlik": 266,
+      "adet": 1
+    },
+    {
+      "id": "KUT-040",
+      "sekil": "kutu",
+      "genislik": 119,
+      "uzunluk": 239,
+      "yukseklik": 119,
+      "agirlik": 403,
+      "adet": 1
+    }
+  ]
+}

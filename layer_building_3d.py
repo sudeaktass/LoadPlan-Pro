@@ -22,7 +22,7 @@ from core_3d import (
     Piece3D, Truck3D, Placement3D, CuttingPlan3D,
     get_all_rotations_3d, check_collision_with_list,
     check_support_3d, check_stacking_rules,
-    DEFAULT_SUPPORT_RATIO
+    DEFAULT_SUPPORT_RATIO, piece_used_volume as _actual_used_volume
 )
 from priority_utils import sort_piece_list_inplace, validate_priority, get_priority_zone
 
@@ -35,12 +35,9 @@ MAX_GAP_CM             = 0      # Ürünler arası boşluk — sıfır (tam yap�
 SMALL_ITEM_THRESHOLD   = 50_000 # cm³ — bu altı "küçük ürün"
 
 
-def _actual_used_volume(placement, piece_info):
-    if piece_info:
-        piece = piece_info.get(placement.piece_id)
-        if piece and getattr(piece, 'shape', 'box') == 'cylinder':
-            return piece.get_actual_volume()
-    return placement.get_volume()
+# _actual_used_volume artık core_3d.piece_used_volume'dan import ediliyor
+# (yukarıdaki import satırına bakınız). Buradaki yerel kopya kaldırıldı —
+# davranış birebir aynı, tek fark tanımın tek yerde durması.
 
 
 @dataclass
@@ -163,13 +160,20 @@ class WallPacker2D:
 # Katman derinliği seçimi
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _choose_layer_depth(pieces: List[Piece3D], remaining_length: int) -> int:
+def _choose_layer_depth(pieces: List[Piece3D], remaining_length: int,
+                        strategy: str = "adaptive") -> int:
     """
-    Katman derinliğini (Y ekseni) dinamik seç.
+    Katman derinliğini (Y ekseni) seç.
 
-    Kural: tüm adayların MİNİMUM min-Y değeri kullanılır.
-    Bu sayede aynı katmana yalnızca aynı (veya daha küçük) derinlikte
-    ürünler girer → katmanlar arası boşluk sıfıra yakın.
+    strategy (UI "Strateji" seçicisiyle birebir — eskiden seçici kozmetikti,
+    değer fonksiyona hiç ulaşmıyordu):
+      "adaptive" → adayların MİNİMUM min-Y'si: aynı katmana yalnızca aynı
+                   (veya daha küçük) derinlikte ürünler girer, katman-içi
+                   boşluk sıfıra yakın (önceki tek davranış).
+      "median"   → adayların medyan min-Y'si: orta kalınlık, karışık
+                   boyutlarda katman sayısı/doluluk dengesi.
+      "max"      → adayların MAKSİMUM min-Y'si: derin katman, az katman
+                   sayısı; homojen-iri yüklerde hızlı dolum.
     """
     if not pieces:
         return remaining_length
@@ -186,7 +190,12 @@ def _choose_layer_depth(pieces: List[Piece3D], remaining_length: int) -> int:
     if not candidates:
         return remaining_length
 
-    return min(candidates)
+    if strategy == "max":
+        return max(candidates)
+    if strategy == "median":
+        candidates.sort()
+        return candidates[len(candidates) // 2]
+    return min(candidates)          # "adaptive" (varsayılan)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -225,12 +234,13 @@ def layer_building_3d_optimization(
     use_guillotine: bool = False,
     depth_extend_max_ratio: float = 0.0,
     use_lookahead: bool = False,
+    depth_strategy: str = "adaptive",   # 'adaptive' | 'median' | 'max' (UI Strateji)
 ) -> CuttingPlan3D:
     """
     Wall-Building heuristic — optimised v2.
 
     Temel farklar v1'e göre:
-    • Katman derinliği dinamik (medyan min-Y), sabit değil
+    • Katman derinliği dinamik ve depth_strategy ile seçilebilir
     • Katman %75 dolmadan kapanmaz; boşluklar küçük ürünlerle doldurulur
     • Araç %80 dolmadan yeni araç açılmaz
     • Büyük→küçük ürün sıralaması her katmanda yenilenir
@@ -296,7 +306,8 @@ def layer_building_3d_optimization(
                             and y_cursor < get_priority_zone(truck_l, p.priority)[0])
                 ] or items_to_place  # fallback: hepsi ertelendiyse orijinal listeyi kullan
                 layer_depth = _choose_layer_depth(depth_candidates,
-                                                   remaining_length)
+                                                   remaining_length,
+                                                   strategy=depth_strategy)
                 if layer_depth <= 0 or layer_depth > remaining_length:
                     remaining_in_truck.extend(items_to_place)
                     items_to_place = []

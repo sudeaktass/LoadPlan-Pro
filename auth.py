@@ -8,7 +8,9 @@ Auth — Kullanıcı Kimlik Doğrulama & Oturum Yönetimi
 """
 
 from __future__ import annotations
+import html
 import logging
+import time as _time
 from typing import Optional
 
 import bcrypt
@@ -41,8 +43,32 @@ def verify_password(password: str, hashed: str) -> bool:
 # ============================================================================
 
 # Oturum süresi (saniye) — 0 = zaman aşımı yok, environment'tan override edilebilir
+# GÜVENLİ VARSAYILAN: 30 dk hareketsizlikte oturum düşer (eski varsayılan 0 =
+# sınırsızdı). Kapatmak için SESSION_TIMEOUT_SECONDS=0 verin.
 import os as _os
-SESSION_TIMEOUT_SECONDS = int(_os.getenv("SESSION_TIMEOUT_SECONDS", "0"))   # 0 = sınırsız
+SESSION_TIMEOUT_SECONDS = int(_os.getenv("SESSION_TIMEOUT_SECONDS", "1800"))
+
+# ── Login brute-force freni (oturum bazlı) ───────────────────────────────────
+_LOGIN_MAX_FAILS   = 5      # bu kadar başarısız denemeden sonra…
+_LOGIN_LOCK_SECS   = 60     # …bu kadar saniye beklet
+
+
+def login_blocked_seconds() -> int:
+    """Arka arkaya başarısız girişten sonra kalan bekleme süresi (0 = serbest)."""
+    fails = st.session_state.get("_login_fails", 0)
+    if fails < _LOGIN_MAX_FAILS:
+        return 0
+    last = float(st.session_state.get("_login_last_fail", 0.0))
+    remain = int(_LOGIN_LOCK_SECS - (_time.time() - last))
+    if remain <= 0:
+        st.session_state["_login_fails"] = 0
+        return 0
+    return remain
+
+
+def _register_login_failure():
+    st.session_state["_login_fails"] = st.session_state.get("_login_fails", 0) + 1
+    st.session_state["_login_last_fail"] = _time.time()
 
 
 def is_logged_in() -> bool:
@@ -103,13 +129,19 @@ def login(email: str, password: str) -> bool:
     E-posta ve şifre ile giriş yapar.
     Başarılıysa session_state'e kullanıcı ve şirket bilgilerini yazar.
     """
+    if login_blocked_seconds() > 0:
+        return False
     user_obj = get_user_by_email(email.strip().lower())
     if user_obj is None:
+        _register_login_failure()
         return False
     if not user_obj.is_active:
+        _register_login_failure()
         return False
     if not verify_password(password, user_obj.password_hash):
+        _register_login_failure()
         return False
+    st.session_state["_login_fails"] = 0
 
     update_last_login(user_obj.id)
     co = get_company(user_obj.company_id)
@@ -138,8 +170,20 @@ def login(email: str, password: str) -> bool:
 
 
 def logout():
+    """Oturumu VE oturuma ait iş verilerini temizler.
+
+    Eski sürüm yalnız auth anahtarlarını siliyordu; paylaşılan terminalde
+    sonraki kullanıcı önceki kullanıcının planlarını/yük listesini görüyordu.
+    """
     for key in ["user_id", "company_id", "current_user", "current_company",
-                "session_start", "last_activity"]:
+                "session_start", "last_activity",
+                # iş verileri
+                "last_results", "last_pieces_3d", "last_trucks_3d",
+                "last_fig_cache", "last_rdict", "last_best_name",
+                "last_mode", "last_project_name",
+                "load_rules", "load_rules_live", "deleted_ids", "geom_store",
+                "df_pallets", "df_trucks", "df_trucks_live",
+                "sw_shapes", "sw_staging", "custom_profiles", "nfp_plot"]:
         st.session_state.pop(key, None)
 
 
@@ -167,7 +211,9 @@ def register_company(company_name: str, admin_email: str,
     except Exception as e:
         if "UNIQUE" in str(e) or "unique" in str(e):
             return False, "Bu şirket adı veya e-posta zaten kayıtlı."
-        return False, f"Kayıt hatası: {e}"
+        # İç hata detayı kullanıcıya sızdırılmaz — log'a yazılır
+        log.error(f"Şirket kaydı hatası: {e}")
+        return False, "Kayıt sırasında bir hata oluştu. Lütfen tekrar deneyin."
 
 
 def add_user_to_company(company_id: int, email: str, full_name: str,
@@ -180,7 +226,8 @@ def add_user_to_company(company_id: int, email: str, full_name: str,
     except Exception as e:
         if "UNIQUE" in str(e):
             return False, "Bu e-posta zaten kayıtlı."
-        return False, f"Hata: {e}"
+        log.error(f"Kullanıcı ekleme hatası: {e}")
+        return False, "Kullanıcı eklenirken bir hata oluştu."
 
 
 # ============================================================================
@@ -224,9 +271,13 @@ def render_login_page():
                 email    = st.text_input("E-posta", placeholder="ornek@sirket.com")
                 password = st.text_input("Şifre", type="password")
                 submitted = st.form_submit_button("Giriş Yap", type="primary",
-                                                  use_container_width=True)
+                                                  width="stretch")
                 if submitted:
-                    if login(email, password):
+                    _blocked = login_blocked_seconds()
+                    if _blocked > 0:
+                        st.error(f"⛔ Çok fazla başarısız deneme — "
+                                 f"{_blocked} sn sonra tekrar deneyin.")
+                    elif login(email, password):
                         st.success("✅ Giriş başarılı!")
                         st.rerun()
                     else:
@@ -240,7 +291,7 @@ def render_login_page():
                 adm_pass  = st.text_input("Şifre (min. 8 karakter)", type="password")
                 adm_pass2 = st.text_input("Şifre Tekrar", type="password")
                 submitted = st.form_submit_button("Şirketi Kaydet", type="primary",
-                                                  use_container_width=True)
+                                                  width="stretch")
                 if submitted:
                     if adm_pass != adm_pass2:
                         st.error("Şifreler eşleşmiyor.")
@@ -284,6 +335,13 @@ def render_user_sidebar():
     email        = user.get("email", "")
     # E-posta çok uzunsa kısalt
     email_disp   = email if len(email) <= 26 else email[:23] + "…"
+
+    # XSS koruması: kayıt formundan gelen değerler unsafe_allow_html HTML'e
+    # gömülür — kaçışlanmadan basılırsa stored XSS olur. html.escape şart.
+    full_name    = html.escape(full_name)
+    initials     = html.escape(initials)
+    company_name = html.escape(company_name)
+    email_disp   = html.escape(email_disp)
 
     st.sidebar.markdown("---")
 
@@ -347,7 +405,7 @@ div[data-testid="stSidebar"] div[data-testid="stButton"]:last-of-type > button:h
 </style>
 """, unsafe_allow_html=True)
 
-    if st.sidebar.button("⏻  Çıkış Yap", use_container_width=True, key="sidebar_logout"):
+    if st.sidebar.button("⏻  Çıkış Yap", width="stretch", key="sidebar_logout"):
         logout()
         st.rerun()
 

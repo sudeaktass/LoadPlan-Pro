@@ -31,18 +31,15 @@ from typing import List, Dict, Optional
 from core_3d import (
     gravity_settle_placements, check_stacking_rules,
     Piece3D, Truck3D, CuttingPlan3D, Placement3D,
-    get_all_rotations_3d
+    get_all_rotations_3d, piece_used_volume as _piece_used_volume
 )
 from extreme_points_3d import create_packing_engine
 from priority_utils import validate_priority, get_priority_zone
 
 
-def _piece_used_volume(placement, piece_info):
-    if piece_info:
-        piece = piece_info.get(placement.piece_id)
-        if piece and piece.shape == "cylinder":
-            return piece.get_actual_volume()
-    return placement.get_volume()
+# _piece_used_volume artık core_3d.piece_used_volume'dan import ediliyor
+# (yukarıdaki import satırına bakınız). Buradaki yerel kopya kaldırıldı —
+# davranış birebir aynı, tek fark tanımın tek yerde durması.
 
 
 def greedy_3d_optimization(
@@ -54,7 +51,7 @@ def greedy_3d_optimization(
     use_lookahead: bool = False, # API uyumu (artık etkisiz)
 ) -> CuttingPlan3D:
     """
-    Volume-Sorted FFD baseline.
+    Greedy / Online Best-Fit (boyut ön-sıralaması YOK — modül docstring'ine bak).
 
     NOT: w_cog ve use_lookahead parametreleri API uyumu için tutuldu.
     Eski sürümde combined = ep_score + w_cog*cog*1000 + 0.1*la*1000

@@ -171,17 +171,37 @@ def multistart_sa_3d(
           f"clustering={use_solution_clustering}")
 
     # ── 1. Başlangıç çözümleri ────────────────────────────────────────────
-    starts = []
-    if initial_solution and initial_solution.bins:
-        starts.append(initial_solution)
+    # DÜZELTME: Tekilleştirme eskiden |Δutil| < 0.01 ile yapılıyordu. Bu
+    # YANLIŞTIR: tüm parçaların sığdığı senaryoda FARKLI yerleşimler bile
+    # birebir aynı doluluk verir (aynı parça seti + aynı araçlar → aynı
+    # hacim) → çeşitlilik tek başlangıca çöküyordu ve "multi-start" fiilen
+    # single-start oluyordu. Artık YAPISAL imza (kim, nerede) karşılaştırılır.
+    def _plan_signature(p) -> frozenset:
+        return frozenset(
+            (b_idx, pl.piece_id, pl.x, pl.y, pl.z, pl.width, pl.length, pl.height)
+            for b_idx, b in enumerate(p.bins) for pl in b
+        )
 
-    extra_starts = _diversified_starts(pieces, trucks, n_starts)
-    for s in extra_starts:
-        if not any(abs(s.utilization - x.utilization) < 0.01 for x in starts):
-            starts.append(s)
+    starts = []
+    _seen_sigs = set()
+
+    def _try_add_start(plan):
+        if plan is None or not plan.bins:
+            return
+        sig = _plan_signature(plan)
+        if sig in _seen_sigs:
+            return          # gerçekten özdeş yerleşim — atla
+        _seen_sigs.add(sig)
+        starts.append(plan)
+
+    if initial_solution and initial_solution.bins:
+        _try_add_start(initial_solution)
+    for s in _diversified_starts(pieces, trucks, n_starts):
+        _try_add_start(s)
 
     starts = starts[:n_starts]
-    print(f"  Başlangıç çözümleri: {[f'%{s.utilization:.1f}' for s in starts]}")
+    print(f"  Başlangıç çözümleri: {[f'%{s.utilization:.1f}' for s in starts]} "
+          f"({len(starts)} yapısal-farklı)")
 
     # ── 2. Kısa exploration turu ──────────────────────────────────────────
     # [DEĞİŞTİRİLDİ] Önce tüm starts'ı çalıştır, varyansı ölç,
@@ -317,7 +337,15 @@ def multistart_sa_3d(
             print(f"  ⚠️ Restart SA hatası: {e}")
 
     # ── En iyi sonucu seç ────────────────────────────────────────────────
-    best = max(final_plans, key=lambda p: p.utilization)
+    # DÜZELTME: Salt utilization karşılaştırması, daha az parça yerleştirip
+    # daha yüksek doluluk gösteren planın kazanmasına izin veriyordu.
+    # Sıra: (1) en çok yerleşen parça, (2) en az araç, (3) en yüksek doluluk.
+    def _plan_rank(p: 'CuttingPlan3D'):
+        placed = sum(len(b) for b in p.bins)
+        bins_used = len([b for b in p.bins if b])
+        return (placed, -bins_used, p.utilization)
+
+    best = max(final_plans, key=_plan_rank)
     execution_time = time.time() - start_time
     best.algorithm = (
         f"DMS-SA ({n_starts} başlangıç, "

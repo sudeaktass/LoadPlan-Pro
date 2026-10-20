@@ -86,6 +86,17 @@ class ExtremePoints3D:
         # Başlangıç EP: orijin noktası (0, 0, 0)
         self.extreme_points: List[Tuple[int, int, int]] = [(0, 0, 0)]
 
+        # PERFORMANS: CoG skor terimi için artımlı ağırlık toplamları.
+        # Eskiden her EP adayında tüm yerleşimler üzerinden yeniden
+        # toplanıyordu (O(n) × EP). Aynı toplama sırası korunduğundan
+        # (append-only liste) sonuç bit-düzeyinde özdeştir.
+        self._w_total = 0.0
+        self._wx = 0.0
+        self._wy = 0.0
+        self._wz = 0.0
+        # Ağırlık kapasite kontrolü için de aynı toplam kullanılır
+        self._weight_sum = 0.0
+
     # ------------------------------------------------------------------
     # PUBLIC: MaxRects3D uyumlu arayüz
     # ------------------------------------------------------------------
@@ -106,25 +117,35 @@ class ExtremePoints3D:
         """
         piece = self.piece_info.get(piece_id)
 
-        # Ağırlık kontrolü
+        # Ağırlık kontrolü (artımlı toplam — her çağrıda O(n) toplama yok)
         if self.truck and piece:
-            current_weight = sum(
-                self.piece_info[p.piece_id].weight
-                for p in self.placements
-                if p.piece_id in self.piece_info
-            )
-            if current_weight + piece.weight > self.truck.capacity:
+            if self._weight_sum + piece.weight > self.truck.capacity:
                 return None
 
         best_score = float('inf')
         best_placement = None
 
+        # PERFORMANS: döngü sabitleri hoist edildi; X/Y sınır kontrolü ve
+        # ez+h ön kontrolü gravity'den ÖNCE yapılır (z >= ez olduğundan
+        # ez+h > yükseklik ⇒ z+h > yükseklik — aynı adaylar elenir, ama
+        # sığmayan EP'ler için O(n) gravity taraması hiç yapılmaz).
+        _placing_shape = (self.piece_info[piece_id].shape
+                          if piece_id in self.piece_info else 'box')
+        _w_lim = self.width  - w
+        _l_lim = self.length - l
+        _h_lim = self.height - h
+        _has_zone = (y_min is not None or y_max is not None)
+
         for ep in self.extreme_points:
             ex, ey, ez = ep
 
+            # ── Sınır ön kontrolleri (gravity'siz elenebilenler) ───────
+            if ex > _w_lim or ey > _l_lim or ez > _h_lim:
+                continue
+
             # ── Oncelik zone kisiti (HARD constraint) ─────────────────
             # Parcayi merkez bazli kontrol et: parca merkezinin zone icinde olmasi gerek
-            if y_min is not None or y_max is not None:
+            if _has_zone:
                 piece_cy = ey + l / 2.0
                 if y_min is not None and piece_cy < y_min:
                     continue
@@ -133,15 +154,16 @@ class ExtremePoints3D:
 
             # Gravity: gerçek Z pozisyonunu bul
             if respect_gravity:
-                placing_shape = self.piece_info.get(piece_id).shape if piece_id in self.piece_info else 'box'
-                z = find_lowest_z_position(ex, ey, w, l, self.placements, piece_info=self.piece_info, placing_shape=placing_shape)
-                z = max(z, ez)  # EP'nin z'sinden aşağı inemez
+                z = find_lowest_z_position(ex, ey, w, l, self.placements,
+                                           piece_info=self.piece_info,
+                                           placing_shape=_placing_shape)
+                if z < ez:
+                    z = ez      # EP'nin z'sinden aşağı inemez
             else:
                 z = ez
 
-            # Bin sınırı kontrolü
-            if (ex + w > self.width or ey + l > self.length or
-                    z + h > self.height):
+            # Bin sınırı kontrolü (yalnız z gravity ile değişti)
+            if z > _h_lim:
                 continue
 
             # Çakışma kontrolü
@@ -224,12 +246,24 @@ class ExtremePoints3D:
         new_placement = Placement3D(x, y, z, w, l, h, piece_id, rot, 0)
         self.placements.append(new_placement)
 
+        # Artımlı ağırlık/CoG toplamları (skor ve kapasite kontrolü için)
+        _pc = self.piece_info.get(piece_id)
+        if _pc is not None:
+            _wt = _pc.weight
+            self._weight_sum += _wt
+            self._w_total += _wt
+            self._wx += _wt * (x + w / 2)
+            self._wy += _wt * (y + l / 2)
+            self._wz += _wt * (z + h / 2)
+
         # Crainic vd. (2008): 3 yönde projeksiyon ile yeni EP üret
         # DÜZELTME: yerleştirilen kutunun boyutları projeksiyona iletiliyor
+        _n_before = len(self.extreme_points)
         self._generate_extreme_points(x, y, z, w, l, h)
 
-        # Geçersiz EP'leri temizle
-        self._prune_extreme_points()
+        # Geçersiz EP'leri temizle (eski EP'ler yalnız YENİ yerleşime karşı)
+        self._prune_extreme_points(new_from=_n_before,
+                                   new_placement=new_placement)
 
     # ------------------------------------------------------------------
     # EP ÜRETİMİ — Crainic vd. (2008) Algoritma  [DÜZELTME: HATA-2]
@@ -403,7 +437,8 @@ class ExtremePoints3D:
     # EP TEMİZLEME  [DÜZELTME: HATA-1]
     # ------------------------------------------------------------------
 
-    def _prune_extreme_points(self) -> None:
+    def _prune_extreme_points(self, new_from: Optional[int] = None,
+                              new_placement: Optional[Placement3D] = None) -> None:
         """
         Geçersiz EP'leri temizle.
 
@@ -414,20 +449,37 @@ class ExtremePoints3D:
         geniş bir kutu x=0'a sığmazken x=100'e sığabilir. Agresif eleme
         doluluk oranını %5-15 düşürüyordu.
 
-        YENİ YAKLAŞIM:
+        YAKLAŞIM:
           1. Sınır dışı EP'leri kaldır.
-          2. Mevcut yerleşimlerin içine düşen EP'leri kaldır.
+          2. Yerleşimlerin içine düşen EP'leri kaldır.
           3. Dominance pruning YAPILMAZ.
           4. MAX_EXTREME_POINTS sınırı aşılırsa BLF sırasına göre
              en iyi noktaları tut (performans için).
+
+        PERFORMANS (new_from/new_placement verilirse): önceki turda hayatta
+        kalan EP'ler eski yerleşimlerin dışındaydı ve sınır içindeydi —
+        onları geçersiz kılabilecek TEK şey yeni yerleşimdir; yalnız ona
+        karşı test edilirler. Yeni üretilen adaylar (index >= new_from)
+        tüm yerleşimlere karşı test edilir. Sonuç kümesi, tam taramayla
+        birebir aynıdır.
         """
+        _incremental = new_from is not None and new_placement is not None
         valid = []
-        for ep in self.extreme_points:
+        for idx, ep in enumerate(self.extreme_points):
             ex, ey, ez = ep
-            # Sınır dışı kontrolü
+            if _incremental and idx < new_from:
+                # Eski EP: sınır içi ve eski yerleşimlerin dışında olduğu
+                # zaten kanıtlı — yalnız yeni yerleşime karşı test et
+                np_ = new_placement
+                if (np_.x <= ex < np_.x + np_.width and
+                        np_.y <= ey < np_.y + np_.length and
+                        np_.z <= ez < np_.z + np_.height):
+                    continue
+                valid.append(ep)
+                continue
+            # Yeni aday (veya tam tarama modu): tüm kontroller
             if ex >= self.width or ey >= self.length or ez >= self.height:
                 continue
-            # Mevcut yerleşimin içinde mi?
             inside = False
             for p in self.placements:
                 if (p.x <= ex < p.x + p.width and
@@ -440,11 +492,25 @@ class ExtremePoints3D:
 
         # ── Dominance pruning KALDIRILDI ────────────────────────────────
         # Koordinat bazlı eleme geçerli yerleşim fırsatlarını yok ediyordu.
-        # Bunun yerine performans sınırı uygula:
+        # Bunun yerine performans sınırı uygula.
+        # DÜZELTME: Saf BLF budaması (düşük y tercihli) yüksek-Y (kapı /
+        # öncelik bölgesi) EP'lerini tamamen atıyordu; limitin %20'si
+        # yüksek-Y EP'lerine ayrılır ki öncelikli parçalar bölgelerinde
+        # her zaman aday nokta bulabilsin.
         if len(valid) > MAX_EXTREME_POINTS:
-            # BLF (Bottom-Left-Front) önceliğine göre sırala: z, y, x
-            valid.sort(key=lambda e: (e[2], e[1], e[0]))
-            valid = valid[:MAX_EXTREME_POINTS]
+            keep_main = int(MAX_EXTREME_POINTS * 0.8)
+            valid.sort(key=lambda e: (e[2], e[1], e[0]))   # BLF: z, y, x
+            head = valid[:keep_main]
+            tail = valid[keep_main:]
+            tail.sort(key=lambda e: (-e[1], e[2], e[0]))   # yüksek y önce
+            head_set = set(head)
+            for ep in tail:
+                if len(head) >= MAX_EXTREME_POINTS:
+                    break
+                if ep not in head_set:
+                    head.append(ep)
+                    head_set.add(ep)
+            valid = head
 
         self.extreme_points = valid if valid else [(0, 0, 0)]
 
@@ -487,30 +553,44 @@ class ExtremePoints3D:
           CoG(0.20) > LIFO(0.10) > derinlik(0.05) > yatay(0.01)
         """
         # ── 1. Temas alanı (ham değer, sonra normalize edilecek) ──────
+        # PERFORMANS: abs() çağrıları inline aralık karşılaştırmalarına
+        # çevrildi, uç koordinatlar hoist edildi — matematik birebir aynı.
         contact = 0
         if x == 0: contact += l * h
         if y == 0: contact += w * h
         if z == 0: contact += w * l
-        if x + w == self.width:  contact += l * h
-        if y + l == self.length: contact += w * h
-        if z + h == self.height: contact += w * l
+        x2 = x + w; y2 = y + l; z2 = z + h
+        if x2 == self.width:  contact += l * h
+        if y2 == self.length: contact += w * h
+        if z2 == self.height: contact += w * l
 
         for p in self.placements:
-            # Alt/üst temas (Z yönü)
-            if abs(z - (p.z + p.height)) < 1 or abs((z + h) - p.z) < 1:
-                ov = calculate_xy_overlap_area(
-                    x, y, w, l, p.x, p.y, p.width, p.length)
-                contact += ov * 2
+            p_x = p.x; p_y = p.y; p_z = p.z
+            p_x2 = p_x + p.width; p_y2 = p_y + p.length; p_z2 = p_z + p.height
+            # Alt/üst temas (Z yönü)  [abs(z - p_z2) < 1  veya  abs(z2 - p_z) < 1]
+            dz1 = z - p_z2; dz2 = z2 - p_z
+            if -1 < dz1 < 1 or -1 < dz2 < 1:
+                ox = (x2 if x2 < p_x2 else p_x2) - (x if x > p_x else p_x)
+                if ox > 0:
+                    oy = (y2 if y2 < p_y2 else p_y2) - (y if y > p_y else p_y)
+                    if oy > 0:
+                        contact += ox * oy * 2
             # X yönü yan temas
-            if abs(x + w - p.x) < 1 or abs(p.x + p.width - x) < 1:
-                ov_y = max(0, min(y + l, p.y + p.length) - max(y, p.y))
-                ov_z = max(0, min(z + h, p.z + p.height) - max(z, p.z))
-                contact += ov_y * ov_z
+            dx1 = x2 - p_x; dx2 = p_x2 - x
+            if -1 < dx1 < 1 or -1 < dx2 < 1:
+                ov_y = (y2 if y2 < p_y2 else p_y2) - (y if y > p_y else p_y)
+                if ov_y > 0:
+                    ov_z = (z2 if z2 < p_z2 else p_z2) - (z if z > p_z else p_z)
+                    if ov_z > 0:
+                        contact += ov_y * ov_z
             # Y yönü yan temas
-            if abs(y + l - p.y) < 1 or abs(p.y + p.length - y) < 1:
-                ov_x = max(0, min(x + w, p.x + p.width) - max(x, p.x))
-                ov_z = max(0, min(z + h, p.z + p.height) - max(z, p.z))
-                contact += ov_x * ov_z
+            dy1 = y2 - p_y; dy2 = p_y2 - y
+            if -1 < dy1 < 1 or -1 < dy2 < 1:
+                ov_x = (x2 if x2 < p_x2 else p_x2) - (x if x > p_x else p_x)
+                if ov_x > 0:
+                    ov_z = (z2 if z2 < p_z2 else p_z2) - (z if z > p_z else p_z)
+                    if ov_z > 0:
+                        contact += ov_x * ov_z
 
         # ── 2. Normalizasyon referansları (araç boyutlarına göre) ──────
         ref_area = self.width * self.length + 1e-9   # Taban alanı — temas referansı
@@ -536,26 +616,18 @@ class ExtremePoints3D:
             front_factor = (piece_cy - front_zone) / (back_span + 1e-9)
 
         # ── 4. CoG sapma cezası (normalize: [0, ~1]) ──────────────────
+        # PERFORMANS: toplamlar place_piece_3d'de artımlı tutulur — her EP
+        # adayında O(n) yeniden toplama yok. Toplama sırası aynı (append
+        # sırası) olduğundan değerler bit-düzeyinde özdeştir.
         cog_norm = 0.0
         if self.piece_info and piece_id:
             piece = self.piece_info.get(piece_id)
             if piece:
-                cx_total = sum(
-                    self.piece_info[p.piece_id].weight * (p.x + p.width  / 2)
-                    for p in self.placements if p.piece_id in self.piece_info
-                ) + piece.weight * (x + w / 2)
-                cy_total = sum(
-                    self.piece_info[p.piece_id].weight * (p.y + p.length / 2)
-                    for p in self.placements if p.piece_id in self.piece_info
-                ) + piece.weight * (y + l / 2)
-                cz_total = sum(
-                    self.piece_info[p.piece_id].weight * (p.z + p.height / 2)
-                    for p in self.placements if p.piece_id in self.piece_info
-                ) + piece.weight * (z + h / 2)
-                tw = sum(
-                    self.piece_info[p.piece_id].weight
-                    for p in self.placements if p.piece_id in self.piece_info
-                ) + piece.weight
+                _pw = piece.weight
+                cx_total = self._wx + _pw * (x + w / 2)
+                cy_total = self._wy + _pw * (y + l / 2)
+                cz_total = self._wz + _pw * (z + h / 2)
+                tw = self._w_total + _pw
                 if tw > 1e-6:
                     new_cog_x = cx_total / tw
                     new_cog_y = cy_total / tw

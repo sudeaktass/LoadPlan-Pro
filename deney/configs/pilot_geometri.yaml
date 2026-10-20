@@ -1,0 +1,89 @@
+# ============================================================================
+# PİLOT GEOMETRİ DENEYİ — Yapılandırma Dosyası
+# ============================================================================
+# Bu dosya, deneyin TEK tanım kaynağıdır. Ayarlar kodun içine gömülü değildir;
+# bir deneyi tekrarlamak için bu dosyayı ve seeds/ altındaki seed listesini
+# kullanmak yeterlidir.
+#
+# Danışman raporu, "ilk 10 iş günü görev paketi" içinde (3) ortak seed ve deney
+# konfigürasyonu ile (4) 30 örnekli pilot geometri veri seti istemektedir.
+# Bu dosya (3), ürettiği örnekler ise (4) numaralı çıktıya karşılık gelir.
+# ============================================================================
+
+deney_adi: pilot_geometri_v1
+aciklama: >
+  Silindir hacim payının kontrollü biçimde değiştirildiği pilot veri seti.
+  Amaç: bounding-box tabanlı doluluk ile gerçek geometri tabanlı doluluk
+  arasındaki farkın, silindir payına bağlı olarak nasıl büyüdüğünü ölçmek.
+
+# ── ÖRNEK ÜRETİMİ ──────────────────────────────────────────────────────────
+ornek_uretimi:
+  # Kontrol edilen faktör: silindir HACİM payı (bounding-box hacmi üzerinden).
+  # 6 seviye × 5 tekrar = 30 örnek
+  silindir_hacim_paylari: [0.00, 0.10, 0.25, 0.50, 0.75, 1.00]
+  seviye_basina_ornek: 5
+
+  parca_sayisi: 40          # her örnekte toplam parça adedi
+
+  # T_V = toplam yük hacmi / toplam filo hacmi.
+  # 0,55 ile başlanmıştı; ölçüldü ki bu değerde algoritmalar tüm parçaları
+  # yerleştiremiyor (yerleştirme boşlukları + silindirlerin bbox ile temsili
+  # nedeniyle). Doluluk karşılaştırmasının geçerli olması için tüm parçaların
+  # yerleşebildiği bir seviye gerekir.
+  #   T_V ≤ 0,40  → tüm algoritmalar 40/40 yerleştiriyor  ✔
+  #   T_V = 0,45  → yalnız silindir örneklerinde bozuluyor
+  #   T_V = 0,55  → her seviyede bozuluyor                 ✘
+  # Ölçüm kaydı: deney/docs/PROTOKOL.md, "T_V seçimi" bölümü.
+  hedef_hacim_sikiligi: 0.35
+
+  # Parça boyut havuzları (cm)
+  kutu_boyutlari:
+    genislik: [60, 80, 100, 120]
+    uzunluk:  [80, 100, 120, 160]
+    yukseklik: [60, 80, 100, 120]
+
+  silindir_boyutlari:
+    cap:       [60, 80, 100, 120]
+    yukseklik: [60, 80, 100, 120]
+
+  agirlik_araligi: [80, 500]  # kg — pilot geometri setinde ağırlık bağlayıcı değildir
+
+# ── FİLO ───────────────────────────────────────────────────────────────────
+# deney_kosumu.py içindeki _fleet() ile aynı tutulmuştur (karşılaştırılabilirlik).
+filo:
+  - {id: Buyuk, genislik: 240, uzunluk: 600, yukseklik: 200, kapasite_kg: 24000, adet: 4}
+  - {id: Orta,  genislik: 240, uzunluk: 420, yukseklik: 200, kapasite_kg: 16000, adet: 3}
+
+# ── KOŞUM PROTOKOLÜ ────────────────────────────────────────────────────────
+kosum:
+  # Danışman raporu stokastik yöntemler için ≥30 bağımsız koşum istemektedir.
+  # Pilot aşamada altyapıyı doğrulamak için düşük tutulabilir; nihai deneyde 30.
+  tekrar_sayisi: 30
+  pilot_tekrar_sayisi: 3      # yalnızca altyapı denemesi için
+
+  zaman_butcesi_s: 1.5        # her metasezgisel koşusu için (nihai deneyde 20-30)
+
+  # Seed listesi ayrı dosyada tutulur — bkz. seeds/
+  seed_dosyasi: seeds/seeds_30.txt
+
+  # Bayesian Optimization KASITLI olarak dışarıda bırakılmıştır: doğrudan
+  # yerleştirme yapan bir çözücü değil, hiperparametre ayarlayan üst seviye bir
+  # katmandır. Adil head-to-head karşılaştırmaya dahil edilmemelidir.
+  # (Danışman raporu, kritik zaaf #4.)
+  bayesian_dahil: false
+
+# ── ÖLÇÜLECEK METRİKLER ────────────────────────────────────────────────────
+# Aynı yerleşim planı için dört ayrı doluluk tanımı da ayrı ayrı kaydedilir;
+# hiçbiri diğerinin yerine kullanılmaz.
+metrikler:
+  - U_BB      # yerleşen parçaların bounding-box hacmi / kullanılan araç hacmi
+  - U_G       # yerleşen parçaların gerçek geometrik hacmi / kullanılan araç hacmi
+  - U_Fleet   # yerleşen gerçek hacim / MEVCUT TÜM filo hacmi (adet dahil)
+  - T_V       # hacim sıkılığı: toplam yük hacmi / toplam filo hacmi
+  - T_W       # ağırlık sıkılığı: toplam ağırlık / toplam filo kapasitesi
+
+# ── ÇIKTI ──────────────────────────────────────────────────────────────────
+cikti:
+  ornek_json_dizini: instances/json
+  ornek_xlsx_dizini: instances/xlsx
+  ham_sonuc_dizini:  results/raw

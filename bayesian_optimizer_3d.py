@@ -32,8 +32,10 @@ Referanslar:
   - Brochu, E., Cora, V.M., & de Freitas, N. (2010). arXiv:1012.2599.
 """
 
+import io
 import time
 import math
+import contextlib
 import statistics
 import warnings
 from typing import List, Optional, Callable, Dict
@@ -136,16 +138,19 @@ def _select_algorithm(features: Dict[str, float]) -> str:
 def _add_warm_start_trial(study, ffd_util: float,
                            target_algorithm: str) -> None:
     """
-    [EKLENDİ] FFD sonucuna en yakın parametre setini Optuna'ya
-    warm-start trial olarak ekle. Bu, TPE surrogate modelinin
-    ilk öğrenme adımını hızlandırır.
+    [DÜZELTİLDİ] Warm-start: makul bir parametre setini ilk trial olarak
+    KUYRUĞA ekler (study.enqueue_trial). Eski kod create_trial(...,
+    distributions={}) kullanıyordu — parametre/dağılım uyuşmazlığı yüzünden
+    exception atıyor ve sessizce yutuluyordu; warm-start hiç çalışmamıştı.
+    enqueue_trial dağılımları çalıştırma anında objective'den çıkarır →
+    her Optuna 3.x sürümünde güvenli.
 
     Feurer et al. (2015): Warm-starting BO, cold-start'a kıyasla
     özellikle az trial sayısında daha iyi parametre bulur.
     """
     try:
-        import optuna
-        # Makul bir başlangıç parametresi seti (problem bağımsız)
+        # NOT: max_time artık hiperparametre değil (deneme-başı tavan sabit)
+        # — warm-start paramları arama uzayıyla birebir hizalı olmalı.
         if target_algorithm == "Genetic":
             params = {
                 "population_size": 50,
@@ -157,25 +162,18 @@ def _add_warm_start_trial(study, ffd_util: float,
             params = {
                 "initial_temp": 1000.0,
                 "cooling_rate": 0.995,
-                "max_time": 30.0,
             }
-        else:  # Tabu
+        elif target_algorithm == "Tabu":
             params = {
                 "max_iterations": 200,
                 "tabu_tenure": 7,
-                "max_time": 30.0,
             }
-        # Distributions ile uyumlu trial oluştur
-        # (optuna 3.x API — add_trial kullanıyoruz)
-        trial = optuna.trial.create_trial(
-            params=params,
-            distributions={},   # Basit: distribution olmadan ekle
-            value=-ffd_util
-        )
-        study.add_trial(trial)
-        print(f"  🌡️ Warm start: {params}")
-    except Exception:
-        pass   # Optuna versiyonu desteklemiyorsa atla
+        else:  # MonteCarlo
+            params = {"iterations": 500}
+        study.enqueue_trial(params)
+        print(f"  🌡️ Warm start (enqueue): {params}")
+    except Exception as _e:
+        print(f"  ⚠️ Warm start eklenemedi: {_e}")
 
 
 # ─── ANA OPTİMİZASYON ────────────────────────────────────────────────────────
@@ -230,6 +228,11 @@ def bayesian_optimization_3d(
     best_plan = ffd_seed
     best_util = ffd_seed.utilization if ffd_seed else 0.0
 
+    # Deneme başına zaman tavanı: bütçenin ~1/12'si (3–60 sn bandında).
+    # 120 sn bütçe → 10 sn/deneme → ~12 tamamlanan deneme: TPE'nin startup
+    # sonrası gerçekten öğrenmesine yetecek örneklem.
+    per_trial_cap = max(3.0, min(time_budget / 12.0, 60.0))
+
     def _objective(trial):
         nonlocal best_plan, best_util
 
@@ -237,64 +240,95 @@ def bayesian_optimization_3d(
             import optuna
             raise optuna.exceptions.TrialPruned()
 
+        # ── DENEME BAŞINA ZAMAN TAVANI ─────────────────────────────────
+        # KÖK NEDEN DÜZELTMESİ: Optuna 'timeout' KOŞAN denemeyi kesmez —
+        # yalnız yenisini başlatmaz. Eski kodda Genetic (pop≤150×gen≤300)
+        # ve MC (≤3000 iter) denemelerinde süre sınırı YOKTU: tek deneme
+        # dakikalarca sürüp bütçeyi katlıyordu; SA/Tabu ise 90/60 sn'ye
+        # kadar öneriyordu → 120 sn bütçeye 1-2 deneme sığıyor, TPE hiç
+        # öğrenemiyordu. Artık HER deneme kalan bütçe ve deneme-başı
+        # tavanla sınırlı → bütçeye uyulur ve TPE'ye yetecek sayıda
+        # deneme tamamlanır.
+        remaining = time_budget - (time.time() - start_time)
+        cap = min(per_trial_cap, max(remaining, 0.0))
+        if cap < 2.0:
+            # Bütçe fiilen bitti: yeni deneme başlatmayı da durdur (graceful)
+            trial.study.stop()
+            raise optuna.exceptions.TrialPruned()
+
+        _quiet = io.StringIO()   # iç algoritma loglarını sustur (deneme başı
+                                 # yüzlerce satır terminali boğuyordu)
         if target_algorithm == "Genetic":
             params = {
-                "population_size": trial.suggest_int("population_size", 20, 150, step=10),
+                "population_size": trial.suggest_int("population_size", 20, 100, step=10),
                 "generations":     trial.suggest_int("generations",     30, 300, step=10),
                 "crossover_rate":  trial.suggest_float("crossover_rate", 0.65, 0.95, step=0.05),
                 "mutation_rate":   trial.suggest_float("mutation_rate",  0.05, 0.40, step=0.05),
             }
-            plan = genetic_3d_optimization(
-                pieces, trucks,
-                population_size=params["population_size"],
-                generations=params["generations"],
-                crossover_rate=params["crossover_rate"],
-                mutation_rate=params["mutation_rate"],
-                initial_solution=ffd_seed,
-            )
+            with contextlib.redirect_stdout(_quiet):
+                plan = genetic_3d_optimization(
+                    pieces, trucks,
+                    population_size=params["population_size"],
+                    generations=params["generations"],
+                    crossover_rate=params["crossover_rate"],
+                    mutation_rate=params["mutation_rate"],
+                    initial_solution=ffd_seed,
+                    max_time=cap,
+                )
 
         elif target_algorithm == "SA":
+            # max_time artık hiperparametre DEĞİL — "daha uzun süre" her
+            # zaman avantajlıydı, arama sahte boyutla kirleniyordu; süre
+            # sabit tavandır, TPE yalnız gerçek parametreleri arar.
             params = {
                 "initial_temp":  trial.suggest_float("initial_temp",  200.0, 3000.0, step=100.0),
                 "cooling_rate":  trial.suggest_float("cooling_rate",  0.985, 0.999,  step=0.001),
-                "max_time":      trial.suggest_float("max_time",      10.0,
-                                                      min(time_budget * 0.6, 90.0), step=5.0),
             }
-            plan = simulated_annealing_3d_optimization(
-                pieces, trucks,
-                initial_solution=ffd_seed,
-                max_time=params["max_time"],
-                initial_temp=params["initial_temp"],
-                cooling_rate=params["cooling_rate"],
-            )
+            with contextlib.redirect_stdout(_quiet):
+                plan = simulated_annealing_3d_optimization(
+                    pieces, trucks,
+                    initial_solution=ffd_seed,
+                    max_time=cap,
+                    initial_temp=params["initial_temp"],
+                    cooling_rate=params["cooling_rate"],
+                )
 
         elif target_algorithm == "Tabu":
             params = {
                 "max_iterations": trial.suggest_int("max_iterations", 100, 1000, step=50),
                 "tabu_tenure":    trial.suggest_int("tabu_tenure",    3,   25),
-                "max_time":       trial.suggest_float("max_time",     10.0,
-                                                       min(time_budget * 0.6, 60.0), step=5.0),
             }
-            plan = tabu_search_3d_optimization(
-                pieces, trucks,
-                initial_solution=ffd_seed,
-                max_iterations=params["max_iterations"],
-                tabu_tenure=params["tabu_tenure"],
-                max_time=params["max_time"],
-            )
+            with contextlib.redirect_stdout(_quiet):
+                plan = tabu_search_3d_optimization(
+                    pieces, trucks,
+                    initial_solution=ffd_seed,
+                    max_iterations=params["max_iterations"],
+                    tabu_tenure=params["tabu_tenure"],
+                    max_time=cap,
+                )
 
         else:  # MonteCarlo
             params = {
                 "iterations": trial.suggest_int("iterations", 100, 3000, step=100),
             }
-            plan = monte_carlo_3d_optimization(
-                pieces, trucks,
-                iterations=params["iterations"],
-                initial_solution=ffd_seed,
-            )
+            with contextlib.redirect_stdout(_quiet):
+                plan = monte_carlo_3d_optimization(
+                    pieces, trucks,
+                    iterations=params["iterations"],
+                    initial_solution=ffd_seed,
+                    max_time=cap,
+                )
 
         util = plan.utilization
-        if util > best_util:
+        print(f"  🔎 Trial {trial.number}: %{util:.2f} ({cap:.0f}s tavan) {params}")
+        # En iyi plan takibi: önce yerleşen parça, sonra araç sayısı, sonra doluluk
+        def _rank(p):
+            if p is None:
+                return (-1, 0, -1.0)
+            return (sum(len(b) for b in p.bins),
+                    -len([b for b in p.bins if b]),
+                    p.utilization)
+        if _rank(plan) > _rank(best_plan):
             best_util = util
             best_plan = plan
             print(f"  ⭐ Trial {trial.number}: %{util:.2f}  {params}")
@@ -306,7 +340,9 @@ def bayesian_optimization_3d(
 
     study = optuna.create_study(
         direction="minimize",
-        sampler=optuna.samplers.TPESampler(seed=42),
+        # n_startup_trials=5: varsayılan 10 rastgele deneme, kısa bütçede
+        # TPE'ye hiç sıra gelmemesine yol açıyordu — 5'ten sonra öğrenme başlar.
+        sampler=optuna.samplers.TPESampler(seed=42, n_startup_trials=5),
         pruner=optuna.pruners.MedianPruner(n_startup_trials=5, n_warmup_steps=3),
     )
 
@@ -317,18 +353,18 @@ def bayesian_optimization_3d(
     print(f"\n🔬 BO-HPO: {target_algorithm}, {n_trials} deneme, {time_budget:.0f}s bütçe, "
           f"warm_start={use_warm_start}")
 
-    # P2 fix — Paralel trial çalışması (CPU çekirdek sayısı kadar)
-    # Trial'lar bağımsız değerlendirilir; paylaşılan study üzerinden TPE
-    # sampler internal lock ile thread-safe çalışır.
-    import os as _os
-    _n_jobs = max(1, min(4, (_os.cpu_count() or 2) - 1))
+    # DÜZELTME: n_jobs>1 kaldırıldı. Paralel thread'ler (1) kilitlenmemiş
+    # nonlocal best_plan/best_util mutasyonunda yarış durumu yaratıyor,
+    # (2) iç algoritmalar global random.seed() kullandığı için birbirinin
+    # rastgeleliğini bozuyordu. Trial'lar CPU-bound olduğundan GIL altında
+    # thread paralelliği zaten kazanç sağlamıyordu.
     study.optimize(
         _objective,
         n_trials=n_trials,
         timeout=time_budget,
         catch=(Exception,),
         show_progress_bar=False,
-        n_jobs=_n_jobs,
+        n_jobs=1,
     )
 
     elapsed = time.time() - start_time

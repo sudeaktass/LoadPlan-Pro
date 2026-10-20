@@ -1,0 +1,11 @@
+kanit,tanim,deger_%
+karisik,plan.utilization  (kodun ekrana yazdigi),48.41
+karisik,U_G   gercek geometri / kullanilan araclar,48.41
+karisik,U_BB  saf bounding-box / kullanilan araclar,53.74
+karisik,U_Fleet  gercek / TUM filo (adet dahil),32.54
+karisik,"U_B  layer-app yolu (fill_ratio, tum filo)",32.54
+yalniz_kutu,plan.utilization  (kodun ekrana yazdigi),57.08
+yalniz_kutu,U_G   gercek geometri / kullanilan araclar,57.08
+yalniz_kutu,U_BB  saf bounding-box / kullanilan araclar,57.08
+yalniz_kutu,U_Fleet  gercek / TUM filo (adet dahil),38.37
+yalniz_kutu,"U_B  layer-app yolu (fill_ratio, tum filo)",38.37

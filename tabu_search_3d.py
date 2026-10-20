@@ -272,12 +272,19 @@ def generate_neighbors(
     max_bins: int = 999,
     freq_matrix: Optional['FrequencyMatrix'] = None,  # [EKLENDİ]
     freq_penalty_w: float = 0.5,                       # [EKLENDİ]
-) -> List[Tuple[TSSolution, TabuMove]]:
+) -> List[Tuple[TSSolution, TabuMove, bool]]:
     """
     Komşuluk üretimi — üç operatör:
       1. TRANSFER: tek item yer değiştirme [KORUNDU]
       2. SWAP: iki item bin değişimi [KORUNDU]
       3. OR-OPT: 2/3 ardışık item blok transferi [EKLENDİ]
+
+    DÜZELTME (Aspiration): Eski kod tabu hamleleri burada, komşu henüz
+    DEĞERLENDİRİLMEDEN eleyip aspiration'a mevcut çözümün fitness'ını
+    veriyordu — aspiration hiç tetiklenemiyordu. Artık tabu hamleler
+    elenmez; (komşu, hamle, is_tabu) üçlüsü döndürülür ve aspiration
+    ana döngüde, komşunun GERÇEK fitness'ı ile uygulanır
+    (Glover & Laguna 1997, Bölüm 2.4).
     """
     neighbors = []
     n_pieces = len(pieces_expanded)
@@ -291,10 +298,6 @@ def generate_neighbors(
                 return True
         return False
 
-    def aspiration(neighbor_fitness: float) -> bool:
-        """[KORUNDU] Aspiration criterion: best'ten daha iyiyse tabu'yu geç."""
-        return neighbor_fitness < best_fitness
-
     # ── 1. TRANSFER ──────────────────────────────────────────────────────
     for _ in range(min(n_pieces, 20)):
         idx = random.randint(0, n_pieces - 1)
@@ -304,10 +307,6 @@ def generate_neighbors(
             target_bins.append(n_bins)
         for target in target_bins[:3]:
             move = TabuMove('transfer', idx, current_bin, target, current_iter)
-            # [EKLENDİ] Frequency penalty fitness tahminine ekleniyor
-            freq_pen = freq_matrix.penalty(idx, target, freq_penalty_w) if freq_matrix else 0
-            if is_tabu(move) and not aspiration(solution.fitness - freq_pen):
-                continue
             new_sol = solution.copy()
             new_sol.bin_assignments[idx] = target
             if current_bin in new_sol.piece_orders:
@@ -315,7 +314,7 @@ def generate_neighbors(
                 if idx in order:
                     order.remove(idx)
             new_sol.piece_orders.setdefault(target, []).append(idx)
-            neighbors.append((new_sol, move))
+            neighbors.append((new_sol, move, is_tabu(move)))
 
     # ── 2. SWAP ──────────────────────────────────────────────────────────
     for _ in range(min(n_pieces, 10)):
@@ -326,12 +325,10 @@ def generate_neighbors(
         if b1 == b2:
             continue
         move = TabuMove('swap', idx1, b1, b2, current_iter)
-        if is_tabu(move) and not aspiration(solution.fitness):
-            continue
         new_sol = solution.copy()
         new_sol.bin_assignments[idx1] = b2
         new_sol.bin_assignments[idx2] = b1
-        neighbors.append((new_sol, move))
+        neighbors.append((new_sol, move, is_tabu(move)))
 
     # ── 3. [EKLENDİ] OR-OPT (Blok Transfer) ─────────────────────────────
     # Crainic et al. (2009) TS2PACK Bölüm 4.2: OR-opt operatörü.
@@ -357,8 +354,6 @@ def generate_neighbors(
             target = random.choice(target_bins)
             # Temsil edici hamle (blok başlangıcı ile temsil et)
             move = TabuMove('or_opt', segment[0], src_bin, target, current_iter)
-            if is_tabu(move) and not aspiration(solution.fitness):
-                continue
 
             new_sol = solution.copy()
             for idx in segment:
@@ -368,7 +363,7 @@ def generate_neighbors(
                     if idx in order:
                         order.remove(idx)
                 new_sol.piece_orders.setdefault(target, []).append(idx)
-            neighbors.append((new_sol, move))
+            neighbors.append((new_sol, move, is_tabu(move)))
 
     return neighbors
 
@@ -385,6 +380,7 @@ def tabu_search_3d_optimization(
     engine: str = 'EP',
     freq_penalty_w: float = 0.5,  # [EKLENDİ] Frekans penaltı ağırlığı (ablasyon)
     seed: Optional[int] = None,   # Sabit seed → tekrarlanabilir sonuç
+    progress_callback=None,       # (gecen_sure, max_time) — UI ilerleme çubuğu
 ) -> CuttingPlan3D:
     """
     3D-TS-EP Optimizasyonu — Glover & Laguna (1997) + Crainic et al. (2009).
@@ -418,8 +414,29 @@ def tabu_search_3d_optimization(
                if initial_solution and initial_solution.bins
                else _create_initial_solution(pieces_expanded, trucks_sorted, max_bins))
 
-    fitness, util, n_bins, plan = evaluate_solution(
-        current, pieces_expanded, trucks, piece_info, engine)
+    # ── Değerlendirme memo-cache ─────────────────────────────────────────
+    # Her komşu değerlendirmesi TAM yeniden-paketleme (EP) çalıştırır — en
+    # pahalı adım. Aynı (atama, sıra) imzalı çözümler tekrar tekrar üretilir;
+    # cache bütçe içindeki iterasyon sayısını belirgin artırır.
+    _eval_cache: Dict[tuple, tuple] = {}
+    _EVAL_CACHE_MAX = 5000
+
+    def _eval_cached(sol: TSSolution):
+        key = (tuple(sol.bin_assignments),
+               tuple(sorted((b, tuple(o)) for b, o in sol.piece_orders.items())))
+        hit = _eval_cache.get(key)
+        if hit is not None:
+            f, u, nb, pl = hit
+            sol.fitness = f
+            sol.total_utilization = u
+            sol.num_bins = nb
+            return f, u, nb, pl
+        res = evaluate_solution(sol, pieces_expanded, trucks, piece_info, engine)
+        if len(_eval_cache) < _EVAL_CACHE_MAX:
+            _eval_cache[key] = res
+        return res
+
+    fitness, util, n_bins, plan = _eval_cached(current)
     print(f"  Başlangıç: {n_bins} bin, %{util:.1f}")
 
     best_solution = current.copy()
@@ -434,8 +451,14 @@ def tabu_search_3d_optimization(
     current_tenure = tabu_tenure
 
     for iteration in range(max_iterations):
-        if time.time() - start_time >= max_time:
+        elapsed = time.time() - start_time
+        if elapsed >= max_time:
             break
+        if progress_callback:
+            try:
+                progress_callback(elapsed, max_time)
+            except Exception:
+                pass
 
         # [EKLENDİ] Her 10 iterasyonda adaptive tenure güncelle
         if iteration % 10 == 0 and iteration > 0:
@@ -455,16 +478,31 @@ def tabu_search_3d_optimization(
                 no_improve_count = 0
             continue
 
+        # Seçim: tabu komşular yalnız ASPIRATION ile (gerçek fitness'ı
+        # global best'i geçiyorsa) kabul edilir. Frequency cezası seçim
+        # skoruna eklenir (long-term diversification, Glover & Laguna Böl.5)
+        # ama global-best takibi GERÇEK fitness ile yapılır.
         best_neighbor, best_neighbor_fitness, best_move = None, float('inf'), None
-        for neighbor, move in neighbors:
-            f, u, nb, p = evaluate_solution(
-                neighbor, pieces_expanded, trucks, piece_info, engine)
-            if f < best_neighbor_fitness:
+        best_select_score = float('inf')
+        best_neighbor_util, best_neighbor_bins, best_neighbor_plan = 0.0, 0, None
+        for neighbor, move, tabu_flag in neighbors:
+            f, u, nb, p = _eval_cached(neighbor)
+            if tabu_flag and not (f < best_fitness):   # aspiration criterion
+                continue
+            freq_pen = (freq_matrix.penalty(move.piece_idx, move.to_bin,
+                                            freq_penalty_w)
+                        if freq_matrix else 0.0)
+            select_score = f + freq_pen
+            if select_score < best_select_score:
+                best_select_score = select_score
                 best_neighbor_fitness = f
                 best_neighbor = neighbor
                 best_move = move
+                best_neighbor_util, best_neighbor_bins = u, nb
+                best_neighbor_plan = p
 
         if best_neighbor is None:
+            no_improve_count += 1
             continue
 
         current = best_neighbor
@@ -479,17 +517,16 @@ def tabu_search_3d_optimization(
         if best_neighbor_fitness < best_fitness:
             best_fitness    = best_neighbor_fitness
             best_solution   = current.copy()
-            _, util, n_bins, best_plan = evaluate_solution(
-                best_solution, pieces_expanded, trucks, piece_info, engine)
-            print(f"  ⭐ iter {iteration}: {n_bins} bin, %{util:.1f}, "
-                  f"tenure={current_tenure}")
+            # Plan seçim döngüsünde zaten hesaplandı — yeniden paketleme yok
+            best_plan       = best_neighbor_plan
+            print(f"  ⭐ iter {iteration}: {best_neighbor_bins} bin, "
+                  f"%{best_neighbor_util:.1f}, tenure={current_tenure}")
             no_improve_count = 0
         else:
             no_improve_count += 1
 
     execution_time = time.time() - start_time
-    _, final_util, final_bins, final_plan = evaluate_solution(
-        best_solution, pieces_expanded, trucks, piece_info, engine)
+    _, final_util, final_bins, final_plan = _eval_cached(best_solution)
     final_plan.execution_time = execution_time
     final_plan.algorithm = f"3D-TS-EP (OR-opt+Adaptive, {max_time}s)"
 

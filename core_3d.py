@@ -25,7 +25,9 @@ from typing import List, Tuple, Optional, Dict
 
 DEFAULT_SUPPORT_RATIO      = 0.80   # Havadaki parça için minimum destekli taban oranı
 GRAVITY_OVERLAP_THRESHOLD  = 0.10  # Düşük eşik: parçalar %10+ örtüşen engelden geçemez
-FRAGILE_MAX_WEIGHT         = 50.0
+# NOT: FRAGILE_MAX_WEIGHT kaldırıldı — hiçbir kontrol kullanmıyordu (ölü kod).
+#      Kırılgan (is_fragile) parçanın üstüne yük koymak MUTLAK yasaktır;
+#      kademeli ağırlık limiti için piece.max_stack_weight kullanılır.
 WEIGHT_CENTER_TOLERANCE    = 0.10
 SCORE_MISSING_PENALTY      = -1000
 SCORE_TRUCK_PENALTY        = -50
@@ -157,10 +159,15 @@ def get_all_rotations_3d(piece: Piece3D) -> List[Tuple[int, int, int, Tuple]]:
     (seen set) ile tekrarlar filtrelenir ve izin flag'leri uygulanır.
     """
     if piece.shape == 'cylinder':
-        # Çap her zaman w=l, yalnızca dikey rotasyon (yatırma) opsiyonel
+        # Dik silindir: taban daire, footprint çap × çap
         rotations = [(piece.width, piece.width, piece.height, (0, 0, 0))]
         if piece.allow_rotation_z and piece.width != piece.height:
-            rotations.append((piece.height, piece.height, piece.width, (0, 90, 0)))
+            # Yatık silindir: taban ÇAP × BOY dikdörtgenidir (kare değil!),
+            # yükseklik = çap. Çakışma/destek hesabında AABB gibi ele alınır
+            # (bkz. get_effective_shape).
+            rotations.append((piece.width, piece.height, piece.width, (0, 90, 0)))
+            if piece.allow_rotation_xy:
+                rotations.append((piece.height, piece.width, piece.width, (90, 90, 0)))
         return rotations
 
     w, l, h = piece.width, piece.length, piece.height
@@ -210,6 +217,80 @@ def _circle_circle_overlap(cx1: float, cy1: float, r1: float,
     return dist2 < (r1 + r2) ** 2
 
 
+def get_effective_shape(placement: 'Placement3D',
+                        piece_info: Optional[Dict]) -> str:
+    """
+    Yerleşimin ETKİN şekli.
+
+    Dik silindirin tabanı dairedir → 'cylinder'.
+    Yatık silindirin tabanı çap×boy dikdörtgenidir; daire matematiği
+    uygulanamaz → güvenli taraf olan AABB ('box') kullanılır.
+
+    Ayrım, boyutlardan yapılır: dik silindir yerleşiminde width == length
+    (her ikisi de çap). Yatıkta width != length. (EP motoru rotation
+    tuple'ını korumadığı için boyut karşılaştırması tek güvenilir sinyaldir;
+    çap == boy olan silindirde iki hâl geometrik olarak zaten örtüşür.)
+    """
+    # PERFORMANS: sonuç, yerleşimin boyutları + parça şekliyle sabittir ve
+    # bu fonksiyon sıcak döngülerde yüz binlerce kez çağrılır → yerleşim
+    # nesnesine önbelleklenir. (Boyutlar yerleştirme sonrası değişmez;
+    # settle/compact yalnız x,y,z taşır, yeni nesneler taze hesaplanır.)
+    cached = getattr(placement, '_eff_shape', None)
+    if cached is not None:
+        return cached
+    if not piece_info:
+        return 'box'          # piece_info yokken önbellekleme YAPMA —
+                              # sonradan gerçek bilgiyle gelinebilir
+    result = 'box'
+    pc = piece_info.get(placement.piece_id)
+    if pc is not None and getattr(pc, 'shape', 'box') == 'cylinder':
+        if placement.width == placement.length:
+            result = 'cylinder'
+    placement._eff_shape = result
+    return result
+
+
+def _circle_circle_overlap_area(cx1: float, cy1: float, r1: float,
+                                 cx2: float, cy2: float, r2: float) -> float:
+    """İki dairenin kesişim (lens) alanı — kapalı form."""
+    d = math.hypot(cx1 - cx2, cy1 - cy2)
+    if d >= r1 + r2:
+        return 0.0
+    if d <= abs(r1 - r2):
+        r = min(r1, r2)
+        return math.pi * r * r
+    a1 = r1 * r1 * math.acos((d * d + r1 * r1 - r2 * r2) / (2 * d * r1))
+    a2 = r2 * r2 * math.acos((d * d + r2 * r2 - r1 * r1) / (2 * d * r2))
+    a3 = 0.5 * math.sqrt(max(0.0, (-d + r1 + r2) * (d + r1 - r2) *
+                                   (d - r1 + r2) * (d + r1 + r2)))
+    return a1 + a2 - a3
+
+
+def _circle_rect_overlap_area(cx: float, cy: float, r: float,
+                               rx: float, ry: float, rw: float, rl: float,
+                               samples: int = 32) -> float:
+    """
+    Daire ile dikdörtgenin kesişim alanı — deterministik grid entegrasyonu.
+    Yalnızca kesişen bölge örneklenir; samples=32 → ~%1 hata, 1024 nokta.
+    """
+    ix0 = max(rx, cx - r);  ix1 = min(rx + rw, cx + r)
+    iy0 = max(ry, cy - r);  iy1 = min(ry + rl, cy + r)
+    if ix0 >= ix1 or iy0 >= iy1:
+        return 0.0
+    dx = (ix1 - ix0) / samples
+    dy = (iy1 - iy0) / samples
+    r2 = r * r
+    cnt = 0
+    for i in range(samples):
+        px = ix0 + (i + 0.5) * dx
+        ddx = (px - cx) ** 2
+        for j in range(samples):
+            py = iy0 + (j + 0.5) * dy
+            if ddx + (py - cy) ** 2 <= r2:
+                cnt += 1
+    return cnt * dx * dy
+
+
 def _circle_rect_overlap(cx: float, cy: float, r: float,
                           rx: int, ry: int, rw: int, rl: int) -> bool:
     """Daire ile dikdörtgenin XY düzleminde çakışması"""
@@ -222,13 +303,15 @@ def _circle_rect_overlap(cx: float, cy: float, r: float,
 
 def check_collision_3d(p1: 'Placement3D', p2: 'Placement3D',
                        piece_info: Optional[Dict] = None) -> bool:
-    """Şekil-farkında çarpışma tespiti"""
-    # Önce Z ekseninde örtüşme
-    if not _z_overlap(p1.z, p1.height, p2.z, p2.height):
+    """Şekil-farkında çarpışma tespiti (sıcak yol — inline Z testi +
+    önbellekli etkin şekil; anlamsal davranış birebir aynı)."""
+    # Önce Z ekseninde örtüşme (inline _z_overlap)
+    if p1.z >= p2.z + p2.height or p2.z >= p1.z + p1.height:
         return False
 
-    s1 = piece_info.get(p1.piece_id).shape if piece_info and p1.piece_id in piece_info else 'box'
-    s2 = piece_info.get(p2.piece_id).shape if piece_info and p2.piece_id in piece_info else 'box'
+    # Etkin şekil: yatık silindir AABB olarak ele alınır (taban dairesel değil)
+    s1 = p1.__dict__.get('_eff_shape') or get_effective_shape(p1, piece_info)
+    s2 = p2.__dict__.get('_eff_shape') or get_effective_shape(p2, piece_info)
 
     if s1 == 'cylinder' and s2 == 'cylinder':
         r1 = p1.width / 2.0;  cx1 = p1.x + r1;  cy1 = p1.y + r1
@@ -252,6 +335,34 @@ def check_collision_3d(p1: 'Placement3D', p2: 'Placement3D',
 def check_collision_with_list(candidate: 'Placement3D',
                               placements: List['Placement3D'],
                               piece_info: Optional[Dict] = None) -> bool:
+    """Aday, listedeki herhangi biriyle çakışıyor mu?
+
+    PERFORMANS: kutu-kutu (en yaygın) çifti için AABB testi inline yapılır —
+    çağrı başına fonksiyon maliyeti düşer; silindir içeren çiftler aynı
+    check_collision_3d yoluna gider (davranış birebir aynı).
+    """
+    c_shape = candidate.__dict__.get('_eff_shape') or \
+        get_effective_shape(candidate, piece_info)
+    if c_shape == 'box':
+        cx = candidate.x; cy = candidate.y; cz = candidate.z
+        cx2 = cx + candidate.width
+        cy2 = cy + candidate.length
+        cz2 = cz + candidate.height
+        for existing in placements:
+            # Z örtüşmesi (inline)
+            if cz >= existing.z + existing.height or existing.z >= cz2:
+                continue
+            e_shape = existing.__dict__.get('_eff_shape') or \
+                get_effective_shape(existing, piece_info)
+            if e_shape == 'box':
+                if (cx2 <= existing.x or existing.x + existing.width <= cx or
+                        cy2 <= existing.y or existing.y + existing.length <= cy):
+                    continue
+                return True
+            elif check_collision_3d(candidate, existing, piece_info):
+                return True
+        return False
+
     for existing in placements:
         if check_collision_3d(candidate, existing, piece_info):
             return True
@@ -274,38 +385,62 @@ def find_lowest_z_position(x: int, y: int, width: int, length: int,
                            overlap_threshold: float = GRAVITY_OVERLAP_THRESHOLD,
                            piece_info: Optional[Dict] = None,
                            placing_shape: str = 'box') -> int:
-    """Gravity: en alttaki geçerli Z pozisyonu (şekil-farkında)"""
-    max_z_below = 0
-    new_area = width * length
+    """Gravity: en alttaki geçerli Z pozisyonu (şekil-farkında).
 
-    # Yerleştirilen nesnenin XY merkezi ve yarıçapı (silindir ise)
+    PERFORMANS: Bu fonksiyon EP motorunun en sıcak noktasıdır (her EP adayı
+    için tüm yerleşimler taranır). Erken elemeler ve inline karşılaştırmalar
+    sonucu DEĞİŞTİRMEZ — yalnız max'ı etkileyemeyecek adaylar atlanır.
+    """
+    max_z_below = 0
+
+    # Yatık silindir (width != length) daire matematiğiyle işlenemez → box
+    if placing_shape == 'cylinder' and width != length:
+        placing_shape = 'box'
+    is_cyl = placing_shape == 'cylinder'
+
+    # Döngü sabitleri (hoist)
+    x2 = x + width
+    y2 = y + length
+    thr = width * length * overlap_threshold   # new_area * eşik
     px_cx = x + width  / 2.0
     px_cy = y + length / 2.0
     px_r  = width / 2.0
 
     for existing in placements:
-        ex_shape = 'box'
-        if piece_info and existing.piece_id in piece_info:
-            ex_shape = piece_info[existing.piece_id].shape
+        # Erken eleme: tepe zaten mevcut max'ın altındaysa örtüşme hesabı
+        # gereksiz — max değişemez (sonuç birebir aynı).
+        candidate_z = existing.z + existing.height
+        if candidate_z <= max_z_below:
+            continue
+
+        ex_shape = existing.__dict__.get('_eff_shape') or \
+            get_effective_shape(existing, piece_info)
 
         if ex_shape == 'cylinder':
             ex_cx = existing.x + existing.width  / 2.0
             ex_cy = existing.y + existing.length / 2.0
             ex_r  = existing.width / 2.0
-            if placing_shape == 'cylinder':
-                overlaps = _circle_circle_overlap(px_cx, px_cy, px_r, ex_cx, ex_cy, ex_r)
+            if is_cyl:
+                overlaps = _circle_circle_overlap(px_cx, px_cy, px_r,
+                                                  ex_cx, ex_cy, ex_r)
             else:
-                overlaps = _circle_rect_overlap(ex_cx, ex_cy, ex_r, x, y, width, length)
+                overlaps = _circle_rect_overlap(ex_cx, ex_cy, ex_r,
+                                                x, y, width, length)
             if overlaps:
-                candidate_z = existing.z + existing.height
-                max_z_below = max(max_z_below, candidate_z)
+                max_z_below = candidate_z
         else:
-            ox = max(0, min(x + width,  existing.x + existing.width)  - max(x, existing.x))
-            oy = max(0, min(y + length, existing.y + existing.length) - max(y, existing.y))
-            overlap_area = ox * oy
-            if new_area > 0 and overlap_area > new_area * overlap_threshold:
-                candidate_z = existing.z + existing.height
-                max_z_below = max(max_z_below, candidate_z)
+            ex_x = existing.x
+            ex_x2 = ex_x + existing.width
+            ox = (x2 if x2 < ex_x2 else ex_x2) - (x if x > ex_x else ex_x)
+            if ox <= 0:
+                continue
+            ex_y = existing.y
+            ex_y2 = ex_y + existing.length
+            oy = (y2 if y2 < ex_y2 else ex_y2) - (y if y > ex_y else ex_y)
+            if oy <= 0:
+                continue
+            if ox * oy > thr:
+                max_z_below = candidate_z
 
     return max_z_below
 
@@ -320,25 +455,35 @@ def check_support_3d(candidate: 'Placement3D',
                      placements: List['Placement3D'],
                      min_support_ratio: float = DEFAULT_SUPPORT_RATIO,
                      piece_info: Optional[Dict] = None) -> bool:
-    """Destek kontrolü — şekil-farkında"""
+    """Destek kontrolü — şekil-farkında, GERÇEK kesişim alanlarıyla.
+
+    BİLİNEN MODEL SINIRI: Destek alanı bitişiklik/moment dengesi gözetmeden
+    toplanır. İki uçtan %40+%40 desteklenen "köprü" parça geçer (fiziksel
+    olarak da stabildir); ancak ağırlık merkezinin destek bölgesi dışında
+    kaldığı asimetrik uç durumlar %80 alan eşiğinde pratikte oluşmaz.
+    Tam statik denge (CoM-üstü-destek + devrilme momenti) bilinçli olarak
+    modellenmemiştir — eklenmesi köprü yerleşimlerini yanlış reddederdi.
+    """
     if candidate.z == 0:
         return True
 
     candidate_area = candidate.width * candidate.length
-    c_shape = 'box'
-    if piece_info and candidate.piece_id in piece_info:
-        c_shape = piece_info[candidate.piece_id].shape
+    c_shape = get_effective_shape(candidate, piece_info)
     if c_shape == 'cylinder':
         candidate_area = math.pi * (candidate.width / 2) ** 2
 
+    # PERFORMANS: total_support monoton artar ve pozitif sabite bölünür —
+    # eşik bir kez aşıldığında sonuç kesinleşir, kalan (pahalı, örn. 1024
+    # noktalı silindir grid'i) hesaplar atlanabilir. Boolean birebir aynı.
     total_support = 0.0
     for existing in placements:
         if abs(existing.z + existing.height - candidate.z) >= 1:
             continue
-        ex_shape = 'box'
-        if piece_info and existing.piece_id in piece_info:
-            ex_shape = piece_info[existing.piece_id].shape
+        ex_shape = existing.__dict__.get('_eff_shape') or \
+            get_effective_shape(existing, piece_info)
 
+        # GERÇEK kesişim alanı kullanılır — eski kod "temas varsa tam kredi"
+        # veriyordu; köşeye 1 cm değen silindir %100 destekli sayılıyordu.
         if c_shape == 'cylinder' and ex_shape == 'cylinder':
             cx1 = candidate.x + candidate.width  / 2.0
             cy1 = candidate.y + candidate.length / 2.0
@@ -346,21 +491,33 @@ def check_support_3d(candidate: 'Placement3D',
             cx2 = existing.x + existing.width  / 2.0
             cy2 = existing.y + existing.length / 2.0
             r2  = existing.width / 2.0
-            if _circle_circle_overlap(cx1, cy1, r1, cx2, cy2, r2):
-                total_support += math.pi * min(r1, r2) ** 2
+            total_support += _circle_circle_overlap_area(cx1, cy1, r1,
+                                                         cx2, cy2, r2)
         elif c_shape == 'cylinder':
             cx = candidate.x + candidate.width  / 2.0
             cy = candidate.y + candidate.length / 2.0
             r  = candidate.width / 2.0
-            if _circle_rect_overlap(cx, cy, r, existing.x, existing.y,
-                                    existing.width, existing.length):
-                total_support += min(candidate_area,
-                                     existing.width * existing.length)
+            total_support += _circle_rect_overlap_area(
+                cx, cy, r, existing.x, existing.y,
+                existing.width, existing.length)
+        elif ex_shape == 'cylinder':
+            # Kutu, silindirin üstünde: destek alanı = dairenin kutu
+            # footprint'iyle kesişimi (bbox değil)
+            ecx = existing.x + existing.width  / 2.0
+            ecy = existing.y + existing.length / 2.0
+            er  = existing.width / 2.0
+            total_support += _circle_rect_overlap_area(
+                ecx, ecy, er, candidate.x, candidate.y,
+                candidate.width, candidate.length)
         else:
             overlap = calculate_xy_overlap_area(
                 candidate.x, candidate.y, candidate.width, candidate.length,
                 existing.x,  existing.y,  existing.width,  existing.length)
             total_support += overlap
+
+        # Erken çıkış: eşik aşıldıysa sonuç değişemez (monoton artış)
+        if candidate_area > 0 and total_support / candidate_area >= min_support_ratio:
+            return True
 
     support_ratio = total_support / candidate_area if candidate_area > 0 else 0
     return support_ratio >= min_support_ratio
@@ -451,15 +608,12 @@ def gravity_settle_placements(placements: List['Placement3D'],
     settled: List[Placement3D] = []
 
     for p in sorted_placements:
-        p_shape = 'box'
-        if piece_info and p.piece_id in piece_info:
-            p_shape = piece_info[p.piece_id].shape
+        p_shape = get_effective_shape(p, piece_info)
 
         best_z = 0
+        best_supporter = None   # best_z'yi belirleyen parça (kırılgan kontrolü)
         for existing in settled:
-            ex_shape = 'box'
-            if piece_info and existing.piece_id in piece_info:
-                ex_shape = piece_info[existing.piece_id].shape
+            ex_shape = get_effective_shape(existing, piece_info)
 
             existing_top = existing.z + existing.height
             if existing_top > p.z + p.height:
@@ -490,7 +644,18 @@ def gravity_settle_placements(placements: List['Placement3D'],
                 overlaps = overlap_ratio >= GRAVITY_OVERLAP_THRESHOLD
 
             if overlaps:
-                best_z = max(best_z, existing_top)
+                if existing_top > best_z:
+                    best_z = existing_top
+                    best_supporter = existing
+
+        # Kırılgan koruması: parçayı, "üstüne yük konmasın" işaretli bir
+        # parçanın tepesine DÜŞÜRME. Motor orijinal z'yi kurallara göre
+        # doğrulamıştı; kırılgan desteğe inecekse orijinal z korunur.
+        if (best_supporter is not None and best_z < p.z
+                and piece_info and best_supporter.piece_id in piece_info
+                and getattr(piece_info[best_supporter.piece_id],
+                            'is_fragile', False)):
+            best_z = p.z
 
         new_p = Placement3D(p.x, p.y, best_z, p.width, p.length, p.height,
                             p.piece_id, p.rotation, p.bin_id)
@@ -515,14 +680,11 @@ def gravity_settle_placements(placements: List['Placement3D'],
         for p in corrected:
             z = p.z
             for existing in new_corrected:
-                # Z aralıkları çakışıyor mu?
-                if not (z < existing.z + existing.height and
-                        existing.z < z + p.height):
-                    continue
-                # XY aralıkları çakışıyor mu?
-                ox = max(0, min(p.x + p.width,  existing.x + existing.width)  - max(p.x, existing.x))
-                oy = max(0, min(p.y + p.length, existing.y + existing.length) - max(p.y, existing.y))
-                if ox > 0 and oy > 0:
+                # Şekil-farkında gerçek çakışma testi (eski kod saf AABB idi;
+                # silindirleri kutu sanıp gereksiz yukarı itiyordu)
+                probe = Placement3D(p.x, p.y, z, p.width, p.length, p.height,
+                                    p.piece_id, p.rotation, p.bin_id)
+                if check_collision_3d(probe, existing, piece_info):
                     # Çakışıyor → bu parçayı existing'in üstüne taşı
                     new_z = existing.z + existing.height
                     if new_z > z:
@@ -673,13 +835,32 @@ OBJ_W_OVERFLOW = 20_000.0
 OBJ_W_COG      = 2_000.0
 
 
-def _objective_used_volume(placement, piece_info):
-    """Silindir için gerçek hacim, diğerleri için bounding-box hacmi."""
+def piece_used_volume(placement, piece_info):
+    """
+    TEK RESMÎ TANIM — yerleşmiş bir parçanın "kullandığı hacim".
+
+    Silindir  : gerçek geometrik hacim (π·r²·h)  → bounding-box yanlılığı düzeltilir
+    Diğerleri : bounding-box hacmi (kutu için zaten gerçek hacme eşittir)
+
+    UYARI: Bu fonksiyonun kopyasını başka dosyalarda TANIMLAMAYIN.
+    Doluluk hesabı yapan her modül bunu core_3d'den import etmelidir; aksi
+    hâlde aynı yerleşim için farklı doluluk yüzdeleri ortaya çıkar.
+    (Daha önce bu fonksiyonun ffd_3d, greedy_3d ve layer_building_3d içinde
+     üç ayrı kopyası vardı — hepsi buraya bağlandı.)
+
+    NOT: STEP/STL mesh parçalarının `_fill_ratio` alanı burada HENÜZ
+    kullanılmıyor; mesh hacmi yalnızca app_3d'deki NFP yolunda dikkate
+    alınıyor. Bu bilinen bir tutarsızlıktır, ayrıca ele alınmalıdır.
+    """
     if piece_info:
         pc = piece_info.get(placement.piece_id)
         if pc and getattr(pc, 'shape', 'box') == 'cylinder':
             return pc.get_actual_volume()
     return placement.get_volume()
+
+
+# Geriye dönük uyumluluk: eski isimle çağıran kod kırılmasın.
+_objective_used_volume = piece_used_volume
 
 
 def packing_objective(bins_list, truck_assignments, trucks, piece_info,
@@ -703,6 +884,13 @@ def packing_objective(bins_list, truck_assignments, trucks, piece_info,
     total_volume = 0.0
     used_volume = 0.0
     for b_idx, placements in enumerate(bins_list):
+        # BOŞ BİN KORUMASI: içinde parça olmayan bir bin paydaya girmemelidir.
+        # Aksi hâlde doluluk haksız yere düşük çıkar; üstelik aşağıdaki
+        # num_bins yalnızca DOLU bin'leri saydığı için iki ölçüt birbiriyle
+        # tutarsız olurdu. (Ölçüldü: mevcut algoritmalar boş bin üretmiyor,
+        # yani bu bir güvenlik önlemidir — davranışı değiştirmez.)
+        if not placements:
+            continue
         t_id = truck_assignments.get(b_idx)
         truck = next((t for t in trucks if t.id == t_id), None)
         if truck is None:
@@ -735,11 +923,11 @@ def packing_objective(bins_list, truck_assignments, trucks, piece_info,
 
 
 __all__ = [
-    'DEFAULT_SUPPORT_RATIO', 'GRAVITY_OVERLAP_THRESHOLD', 'FRAGILE_MAX_WEIGHT',
+    'DEFAULT_SUPPORT_RATIO', 'GRAVITY_OVERLAP_THRESHOLD',
     'WEIGHT_CENTER_TOLERANCE', 'SCORE_MISSING_PENALTY', 'SCORE_TRUCK_PENALTY',
     'SCORE_UTILIZATION_WEIGHT',
     'Piece3D', 'Placement3D', 'Truck3D', 'Cuboid', 'CuttingPlan3D',
-    'get_all_rotations_3d',
+    'get_all_rotations_3d', 'get_effective_shape',
     'check_collision_3d', 'check_collision_with_list', 'is_within_bounds_3d',
     'find_lowest_z_position', 'calculate_xy_overlap_area',
     'check_support_3d', 'check_stacking_rules',

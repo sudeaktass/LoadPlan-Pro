@@ -45,7 +45,27 @@ engine = create_engine(
     connect_args={"check_same_thread": False} if "sqlite" in _DB_URL else {},
     echo=False,
 )
-SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+
+# SQLite dayanıklılık: WAL modu eşzamanlı okuma/yazmada "database is locked"
+# hatasını büyük ölçüde önler; busy_timeout kalan çakışmalarda 5 sn bekletir.
+if _DB_URL.startswith("sqlite"):
+    from sqlalchemy import event as _sa_event
+
+    @_sa_event.listens_for(engine, "connect")
+    def _sqlite_pragmas(dbapi_conn, _record):
+        cur = dbapi_conn.cursor()
+        try:
+            cur.execute("PRAGMA journal_mode=WAL")
+            cur.execute("PRAGMA busy_timeout=5000")
+        finally:
+            cur.close()
+
+# expire_on_commit=False: CRUD fonksiyonları session'ı kapatıp detached nesne
+# döndürüyor — commit sonrası attribute expiry, kapalı session'da
+# DetachedInstanceError üretirdi. Kolon değerleri artık bellekte kalır.
+# (İlişki erişimi — örn. user.company — yine de session gerektirir.)
+SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False,
+                            expire_on_commit=False)
 Base = declarative_base()
 
 
@@ -246,10 +266,15 @@ def create_project(company_id: int, owner_id: int, name: str,
         db.close()
 
 
-def get_project(project_id: int) -> Optional[Project]:
+def get_project(project_id: int,
+                company_id: Optional[int] = None) -> Optional[Project]:
+    """company_id verilirse yalnız o şirketin projesi döner (IDOR koruması)."""
     db = get_session()
     try:
-        return db.query(Project).filter(Project.id == project_id).first()
+        q = db.query(Project).filter(Project.id == project_id)
+        if company_id is not None:
+            q = q.filter(Project.company_id == company_id)
+        return q.first()
     finally:
         db.close()
 
@@ -282,8 +307,15 @@ def save_project_data(project_id: int, trucks: list, pieces: list,
         p.truck_count = sum(t.get("adet", t.get("available", 1)) for t in trucks)
         if results:
             p.set_results(results)
-            # En iyi algoritmayı bul
-            best_key = max(results, key=lambda k: results[k].get("utilization", 0))
+            # En iyi algoritma: (1) en çok yerleşen parça, (2) en az araç,
+            # (3) en yüksek doluluk — salt utilization eksik parçalı planı
+            # "en iyi" gösterebiliyordu.
+            def _rank(k):
+                r = results[k]
+                return (r.get("placed", 0),
+                        -r.get("truck_count", 0),
+                        r.get("utilization", 0))
+            best_key = max(results, key=_rank)
             p.best_algorithm   = best_key
             p.best_utilization = results[best_key].get("utilization", 0)
         p.updated_at = datetime.utcnow()
@@ -297,10 +329,15 @@ def save_project_data(project_id: int, trucks: list, pieces: list,
         db.close()
 
 
-def delete_project(project_id: int) -> bool:
+def delete_project(project_id: int,
+                   company_id: Optional[int] = None) -> bool:
+    """company_id verilirse yalnız o şirketin projesi silinebilir."""
     db = get_session()
     try:
-        p = db.query(Project).filter(Project.id == project_id).first()
+        q = db.query(Project).filter(Project.id == project_id)
+        if company_id is not None:
+            q = q.filter(Project.company_id == company_id)
+        p = q.first()
         if not p:
             return False
         db.delete(p)
@@ -310,13 +347,55 @@ def delete_project(project_id: int) -> bool:
         db.close()
 
 
-def archive_project(project_id: int) -> bool:
+def archive_project(project_id: int,
+                    company_id: Optional[int] = None) -> bool:
+    """company_id verilirse yalnız o şirketin projesi arşivlenebilir."""
     db = get_session()
     try:
-        db.query(Project).filter(Project.id == project_id).update(
-            {"status": "archived", "updated_at": datetime.utcnow()})
+        q = db.query(Project).filter(Project.id == project_id)
+        if company_id is not None:
+            q = q.filter(Project.company_id == company_id)
+        q.update({"status": "archived", "updated_at": datetime.utcnow()},
+                 synchronize_session=False)
         db.commit()
         return True
+    finally:
+        db.close()
+
+
+# ── Misafir hesabı ───────────────────────────────────────────────────────────
+
+def get_or_create_guest() -> tuple:
+    """
+    Misafir modu için GERÇEK bir şirket + kullanıcı satırı döndürür.
+
+    Eski davranış owner_id="guest" (string) yazıyordu: SQLite tip esnekliğiyle
+    çalışıyor, PostgreSQL'de Integer FK ihlaliyle proje kaydı SESSİZCE
+    başarısız oluyordu. Gerçek satır her iki veritabanında da bütünlüğü korur.
+
+    Returns: (Company, User)
+    """
+    GUEST_EMAIL = "guest@local"
+    db = get_session()
+    try:
+        user = db.query(User).filter(User.email == GUEST_EMAIL).first()
+        if user:
+            co = db.query(Company).filter(Company.id == user.company_id).first()
+            return co, user
+        co = db.query(Company).filter(Company.slug == "misafir-local").first()
+        if co is None:
+            co = Company(name="Misafir Çalışma Alanı", slug="misafir-local",
+                         plan="enterprise")
+            db.add(co)
+            db.flush()
+        user = User(company_id=co.id, email=GUEST_EMAIL,
+                    full_name="Misafir",
+                    password_hash="!",   # kullanılamaz hash — şifreyle giriş yok
+                    role="admin")
+        db.add(user)
+        db.commit()
+        db.refresh(co); db.refresh(user)
+        return co, user
     finally:
         db.close()
 

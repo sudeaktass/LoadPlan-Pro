@@ -8,6 +8,7 @@ Yeni GA'nın index-based Individual yapısını ve _pack_individual'ı kullanır
 Sonunda assert: yerleştirilen + yerleşmeyen == toplam.
 """
 
+import os
 import random
 import time
 from typing import List, Dict, Tuple, Optional
@@ -20,6 +21,9 @@ from genetic_3d import (
     _tournament_selection,
     _order_crossover,
     _mutate,
+    _plan_to_individual,
+    _ga_worker_init,
+    _ga_worker_eval,
 )
 
 
@@ -45,6 +49,9 @@ def island_genetic_3d_optimization(
     progress_callback=None,
     max_time: float = 0.0,   # 0 = sınırsız (yalnız jenerasyon); >0 = zaman bütçesi (sn)
     seed: Optional[int] = None,   # Sabit seed → tekrarlanabilir sonuç
+    n_workers: Optional[int] = None,  # None→env LOADPLAN_GA_WORKERS; 0=paralel kapalı
+    migration_callback=None,  # (gen, src_ada, dst_ada, gocmen, gocmen_skoru,
+                              #  src_en_iyi_skor) — gözlemlenebilirlik/kanıt testi
     # API uyumu
     use_adaptive_migration: bool = False,
     use_heterogeneous_ops: bool = False,
@@ -79,32 +86,95 @@ def island_genetic_3d_optimization(
     for _ in range(n_islands):
         islands.append(_create_initial_population(pieces_expanded, island_population))
 
+    # FFD/başlangıç çözümünü 0. adaya tohumla — parametre bugüne dek
+    # kabul edilip YOK SAYILIYORDU (GA'daki düzeltmenin aynısı).
+    if initial_solution is not None and islands and islands[0]:
+        _seed_ind = _plan_to_individual(initial_solution, pieces_expanded)
+        if _seed_ind is not None:
+            islands[0][0] = _seed_ind
+            print("  🌱 initial_solution 0. adaya tohumlandı")
+
     best_score = float('-inf')
     best_plan_data = None
     fitness_cache: Dict[Tuple[int, ...], Tuple[float, dict]] = {}
+    _CACHE_MAX = 50_000   # sınırsız büyüme (bellek) freni
 
+    # ── Opsiyonel süreç havuzu (GA ile aynı worker altyapısı) ───────────
+    if n_workers is None:
+        try:
+            n_workers = int(os.getenv("LOADPLAN_GA_WORKERS", "0"))
+        except ValueError:
+            n_workers = 0
+    _executor = None
+    if n_workers and n_workers > 0 and total_pieces >= 8:
+        try:
+            from concurrent.futures import ProcessPoolExecutor
+            _executor = ProcessPoolExecutor(
+                max_workers=n_workers,
+                initializer=_ga_worker_init,
+                initargs=(pieces_expanded, trucks, "EP"))
+        except Exception as _pe:
+            print(f"  ⚠️ Paralel havuz açılamadı ({_pe}) — sıralı devam")
+            _executor = None
+
+    _time_up = False
     for gen in range(generations):
         # Zaman bütçesi kontrolü — adil karşılaştırma için erken sonlanma
-        if max_time > 0 and (time.time() - start_time) >= max_time:
+        if _time_up or (max_time > 0 and (time.time() - start_time) >= max_time):
             print(f"  ⏱️ Island GA zaman bütçesi doldu (gen {gen}/{generations})")
             break
+
+        # Önbellekte olmayan bireyleri TÜM adalardan toplayıp paralel
+        # değerlendir; sonuçlar cache'e yazılır → aşağıdaki sıralı akış
+        # aynı sırayla okur (sonuç sıralı koşuyla birebir aynı).
+        if _executor is not None:
+            pending, seen_p = [], set()
+            for pop in islands:
+                for ind in pop:
+                    key = tuple(ind)
+                    if key not in fitness_cache and key not in seen_p:
+                        pending.append((key, ind))
+                        seen_p.add(key)
+            if len(pending) >= 2:
+                try:
+                    for (key, _ind), res in zip(
+                            pending,
+                            _executor.map(_ga_worker_eval,
+                                          [i for _, i in pending])):
+                        if len(fitness_cache) < _CACHE_MAX:
+                            fitness_cache[key] = res
+                except Exception as _we:
+                    print(f"  ⚠️ Paralel değerlendirme hatası ({_we}) — "
+                          "sıralıya dönülüyor")
+                    _executor.shutdown(wait=False, cancel_futures=True)
+                    _executor = None
+
         # Her ada bağımsız evrim
         for island_idx in range(n_islands):
             pop = islands[island_idx]
             mut_rate = island_mut_rates[island_idx]
             scored = []
             for ind in pop:
+                # İnce taneli süre kontrolü (en az bir çözüm garantili)
+                if (max_time > 0 and best_plan_data is not None
+                        and (time.time() - start_time) >= max_time):
+                    _time_up = True
+                    break
                 key = tuple(ind)
                 if key in fitness_cache:
                     score, plan_data = fitness_cache[key]
                 else:
                     score, plan_data = _evaluate_individual(
                         ind, pieces_expanded, trucks, piece_info)
-                    fitness_cache[key] = (score, plan_data)
+                    if len(fitness_cache) < _CACHE_MAX:
+                        fitness_cache[key] = (score, plan_data)
                 scored.append((score, ind, plan_data))
                 if score > best_score:
                     best_score = score
                     best_plan_data = plan_data
+
+            if _time_up or not scored:
+                break
 
             scored.sort(key=lambda x: x[0], reverse=True)
 
@@ -127,8 +197,8 @@ def island_genetic_3d_optimization(
                     new_pop.append(c2)
             islands[island_idx] = new_pop
 
-        # Ring migration
-        if (gen + 1) % migration_interval == 0 and n_islands > 1:
+        # Ring migration (süre dolmuşsa atla — çıkışa gidiliyor)
+        if not _time_up and (gen + 1) % migration_interval == 0 and n_islands > 1:
             migrants_per_island = []
             for pop in islands:
                 scored_pop = []
@@ -136,11 +206,22 @@ def island_genetic_3d_optimization(
                     s = fitness_cache.get(tuple(ind), (float('-inf'), None))[0]
                     scored_pop.append((s, ind))
                 scored_pop.sort(key=lambda x: -x[0])
-                migrants_per_island.append([ind for _, ind in scored_pop[:migration_rate]])
+                # (skor, birey) tuple'ları korunur — göç kanıt callback'i
+                # göçmenin gerçekten kaynak adanın en iyisi olduğunu
+                # doğrulayabilsin
+                migrants_per_island.append(scored_pop[:migration_rate])
 
             for i in range(n_islands):
                 target = (i + 1) % n_islands
-                for m in migrants_per_island[i]:
+                src_best_score = (migrants_per_island[i][0][0]
+                                  if migrants_per_island[i] else float('-inf'))
+                for m_score, m in migrants_per_island[i]:
+                    if migration_callback:
+                        try:
+                            migration_callback(gen + 1, i, target, list(m),
+                                               m_score, src_best_score)
+                        except Exception:
+                            pass
                     worst_idx = 0
                     worst_score = float('inf')
                     for j, ind in enumerate(islands[target]):
@@ -155,6 +236,9 @@ def island_genetic_3d_optimization(
         if (gen + 1) % 10 == 0:
             unfit = best_plan_data.get('unfitted', '?') if best_plan_data else '?'
             print(f"  Gen {gen+1}/{generations} | Skor: {best_score:.1f} | unfit: {unfit}")
+
+    if _executor is not None:
+        _executor.shutdown(wait=False, cancel_futures=True)
 
     execution_time = time.time() - start_time
 
@@ -198,7 +282,7 @@ def island_genetic_3d_optimization(
         execution_time=execution_time,
         algorithm=f"Island GA ({n_islands} ada)",
         truck_assignments=truck_assignments,
-        unfitted_pieces=[],
+        unfitted_pieces=best_plan_data.get('unfitted_list', []),
     )
 
 
