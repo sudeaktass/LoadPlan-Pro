@@ -76,6 +76,67 @@ class VehicleSelectionResult:
     log_lines: List[str]
 
 
+def filo_on_kontrol(pieces: List[Piece3D],
+                    trucks: List[Truck3D]) -> List[str]:
+    """
+    FAZ 1 (YENİ) — yalnızca YETERLİLİK ön kontrolü. Filoyu DARALTMAZ.
+
+    Karar K4/B.4: kullanıcının girdiği filo bir TAVANDIR; hangi araçların
+    açılacağına algoritma karar verir (filo_havuzu). Eskiden bu aşamada
+    minimum_vehicle_selector FFD simülasyonuyla birkaç araç seçip
+    algoritmalara YALNIZCA onları veriyordu; algoritmalar başka bir araç
+    bileşimi deneyemiyordu (hoca_gorusmesi_notu.md Bölüm 3, sorun #1).
+
+    ⚠ Bu kontrol yalnızca "KESİNLİKLE SIĞMAZ" durumunu yakalar. Geçmesi
+    yükün yerleşeceğini GARANTİ ETMEZ: hacim karşılaştırması %100
+    paketleme varsayar, gerçek yerleşimde boşluk kaçınılmazdır.
+
+    Hacim için parçanın GERÇEK hacmi kullanılır (silindirde πr²h). Dış
+    kutu hacmi kullanılsaydı gerçekte sığan bir yük reddedilebilirdi.
+
+    Raises:
+        ValueError: filo kesinlikle yetersiz (hacim ya da ağırlık)
+    """
+    if not pieces:
+        raise ValueError("❌ Sipariş listesi boş.")
+    if not trucks:
+        raise ValueError("❌ Araç listesi boş.")
+
+    n_pieces = sum(p.quantity for p in pieces)
+    talep_hacim = sum(p.get_actual_volume() * p.quantity for p in pieces)
+    talep_agirlik = sum(p.weight * p.quantity for p in pieces)
+
+    filo_hacim = sum(t.get_volume() * t.available for t in trucks)
+    filo_agirlik = sum(t.capacity * t.available for t in trucks)
+
+    log_lines = [
+        f"📦 Toplam talep: {n_pieces} parça | "
+        f"{talep_hacim/1e9:.2f} m³ (gerçek hacim) | {talep_agirlik:.0f} kg",
+        f"🚚 Filo tavanı : {sum(t.available for t in trucks)} araç | "
+        f"{filo_hacim/1e9:.2f} m³ | {filo_agirlik:.0f} kg",
+    ]
+
+    if talep_hacim > filo_hacim:
+        raise ValueError(
+            f"❌ Filo hacmi kesinlikle yetersiz!\n"
+            f"Gereken (gerçek hacim): {talep_hacim/1e9:.2f} m³, "
+            f"filo hacmi: {filo_hacim/1e9:.2f} m³"
+        )
+    if talep_agirlik > filo_agirlik:
+        raise ValueError(
+            f"❌ Filo ağırlık kapasitesi kesinlikle yetersiz!\n"
+            f"Gereken: {talep_agirlik:.0f} kg, "
+            f"filo kapasitesi: {filo_agirlik:.0f} kg"
+        )
+
+    log_lines.append(
+        "✅ Ön kontrol geçti — araç seçimini algoritma yapacak (tavan: "
+        "tüm filo). Not: bu kontrol yalnız 'kesinlikle sığmaz' durumunu "
+        "yakalar, yerleşimi garanti etmez."
+    )
+    return log_lines
+
+
 def minimum_vehicle_selector(
     pieces: List[Piece3D],
     trucks: List[Truck3D],

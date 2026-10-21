@@ -162,6 +162,114 @@ class Project(Base):
 
 
 # ============================================================================
+# FİLO KAYDI (karar I, 21 Ekim 2026) — çekici ve dorse ayrı varlıklar (V-B)
+# ============================================================================
+# Araçlar bir kez girilir, her projede yeniden seçilir. Ayrıntılı alanlar
+# veri_json'da tutulur; böylece filo_modeli'ne yeni bir alan eklendiğinde
+# şema göçü gerekmez. Yalnız sorgulanan alanlar (plaka, tip) kolondur.
+#
+# Silme YOKTUR, "pasife alma" vardır: eski planların hangi araçla yapıldığı
+# korunsun diye.
+
+class CekiciKaydi(Base):
+    __tablename__ = "cekiciler"
+
+    id          = Column(Integer, primary_key=True, index=True)
+    company_id  = Column(Integer, ForeignKey("companies.id"), nullable=True)
+    plaka       = Column(String(32), nullable=False, unique=True, index=True)
+    marka_model = Column(String(160), nullable=True)
+    veri_json   = Column(Text, nullable=False)     # filo_modeli.Cekici
+    aktif       = Column(Boolean, default=True)
+    created_at  = Column(DateTime, default=datetime.utcnow)
+    updated_at  = Column(DateTime, default=datetime.utcnow,
+                         onupdate=datetime.utcnow)
+
+    def get_veri(self) -> dict:
+        return json.loads(self.veri_json) if self.veri_json else {}
+
+    def set_veri(self, data: dict):
+        self.veri_json = json.dumps(data, ensure_ascii=False)
+
+
+class DorseKaydi(Base):
+    __tablename__ = "dorseler"
+
+    id          = Column(Integer, primary_key=True, index=True)
+    company_id  = Column(Integer, ForeignKey("companies.id"), nullable=True)
+    plaka       = Column(String(32), nullable=False, unique=True, index=True)
+    tip         = Column(String(60), nullable=True)
+    veri_json   = Column(Text, nullable=False)     # filo_modeli.Dorse
+    aktif       = Column(Boolean, default=True)
+    created_at  = Column(DateTime, default=datetime.utcnow)
+    updated_at  = Column(DateTime, default=datetime.utcnow,
+                         onupdate=datetime.utcnow)
+
+    def get_veri(self) -> dict:
+        return json.loads(self.veri_json) if self.veri_json else {}
+
+    def set_veri(self, data: dict):
+        self.veri_json = json.dumps(data, ensure_ascii=False)
+
+
+class Ayar(Base):
+    """Küçük, kalıcı anahtar–değer ayarları.
+
+    Oturum durumu (st.session_state) sayfa yenilenince sıfırlanıyor; filo
+    seçimi gibi kullanıcı tercihleri burada saklanır.
+    """
+    __tablename__ = "ayarlar"
+
+    anahtar = Column(String(64), primary_key=True)
+    deger   = Column(Text, nullable=True)
+
+
+def ayar_oku(anahtar: str, varsayilan=None):
+    with get_session() as s:
+        satir = s.query(Ayar).filter(Ayar.anahtar == anahtar).first()
+        if satir is None or satir.deger is None:
+            return varsayilan
+        try:
+            return json.loads(satir.deger)
+        except Exception:
+            return varsayilan
+
+
+def ayar_yaz(anahtar: str, deger) -> None:
+    with get_session() as s:
+        satir = s.query(Ayar).filter(Ayar.anahtar == anahtar).first()
+        if satir is None:
+            satir = Ayar(anahtar=anahtar)
+            s.add(satir)
+        satir.deger = json.dumps(deger, ensure_ascii=False)
+        s.commit()
+
+
+def plaka_kullanimda_mi(plaka: str, haric_id: int | None = None,
+                        haric_tablo: str | None = None) -> str | None:
+    """
+    Plaka benzersizliği — karar S17(b).
+
+    Veritabanı `unique=True` yalnız KENDİ tablosunda benzersizlik sağlar.
+    Gerçekte bir çekici ile bir dorse aynı plakayı taşıyamaz, bu yüzden
+    iki tabloya birden bakan bu kontrol uygulama katmanında yapılır.
+
+    Returns:
+        Çakışma varsa açıklama metni, yoksa None.
+    """
+    plaka = (plaka or "").strip()
+    if not plaka:
+        return "Plaka boş olamaz."
+    with get_session() as s:
+        c = s.query(CekiciKaydi).filter(CekiciKaydi.plaka == plaka).first()
+        if c and not (haric_tablo == "cekici" and c.id == haric_id):
+            return f"'{plaka}' zaten bir ÇEKİCİ plakası olarak kayıtlı."
+        d = s.query(DorseKaydi).filter(DorseKaydi.plaka == plaka).first()
+        if d and not (haric_tablo == "dorse" and d.id == haric_id):
+            return f"'{plaka}' zaten bir DORSE plakası olarak kayıtlı."
+    return None
+
+
+# ============================================================================
 # TABLO OLUŞTUR
 # ============================================================================
 

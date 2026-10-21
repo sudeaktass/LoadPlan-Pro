@@ -38,6 +38,7 @@ from core_3d import (
     get_all_rotations_3d, piece_used_volume as _piece_used_volume
 )
 from extreme_points_3d import create_packing_engine
+from filo_havuzu import FiloHavuzu, arac_ac
 from priority_utils import sort_piece_list_inplace, validate_priority, get_priority_zone
 
 
@@ -157,7 +158,7 @@ def ffd_3d_optimization(
     """
     start_time = time.time()
     piece_info = {p.id: p for p in pieces}
-    trucks_sorted = sorted(trucks, key=lambda t: t.get_volume())
+    havuz = FiloHavuzu(trucks)          # ortak araç açma (sıra: filo_havuzu.ACMA_SIRASI)
 
     piece_list = []
     for piece in pieces:
@@ -193,26 +194,34 @@ def ffd_3d_optimization(
     open_bins: Dict[int, dict] = {}
     truck_assignments: Dict[int, str] = {}
     placements_by_bin: Dict[int, List[Placement3D]] = {}
-    truck_used_count: Dict[str, int] = {t.id: 0 for t in trucks}
     unfitted_pieces = []
     placed_count = 0
 
-    def open_new_bin() -> Optional[int]:
-        for truck in trucks_sorted:
-            if truck_used_count[truck.id] < truck.available:
-                bid = len(open_bins)
-                truck_used_count[truck.id] += 1
-                packer = create_packing_engine(
-                    truck.width, truck.length, truck.height,
-                    engine=engine, heuristic=heuristic,
-                    truck=truck, piece_info=piece_info
-                )
-                open_bins[bid] = {'truck': truck, 'packer': packer}
-                placements_by_bin[bid] = []
-                truck_assignments[bid] = truck.id
-                print(f"  🚚 Yeni bin: {bid} → {truck.id}")
-                return bid
-        return None
+    # ── ORTAK ARAÇ AÇMA (filo_havuzu) ───────────────────────────────────
+    # Eskiden buradaki kopya "küçükten büyüğe" açıyordu; artık sıra tüm
+    # algoritmalar için tek bir parametre (filo_havuzu.ACMA_SIRASI).
+    def _bin_olustur(truck: Truck3D) -> int:
+        bid = len(open_bins)
+        packer = create_packing_engine(
+            truck.width, truck.length, truck.height,
+            engine=engine, heuristic=heuristic,
+            truck=truck, piece_info=piece_info
+        )
+        open_bins[bid] = {'truck': truck, 'packer': packer}
+        placements_by_bin[bid] = []
+        truck_assignments[bid] = truck.id
+        print(f"  🚚 Yeni bin: {bid} → {truck.id}")
+        return bid
+
+    def _bin_iptal(bid: int) -> None:
+        """Parçayı alamayan yeni bini geri al (boş araç planda kalmasın)."""
+        open_bins.pop(bid, None)
+        placements_by_bin.pop(bid, None)
+        truck_assignments.pop(bid, None)
+
+    def open_new_bin(piece: Optional[Piece3D] = None) -> Optional[int]:
+        return arac_ac(havuz, piece, _bin_olustur,
+                       lambda bid: place_in_bin(bid, piece), _bin_iptal)
 
     def place_in_bin(bin_id: int, piece: Piece3D) -> bool:
         packer = open_bins[bin_id]['packer']
@@ -276,13 +285,11 @@ def ffd_3d_optimization(
         # First-fit modunda, tüm binler denendi; hepsi başarısız ise yeni bin aç.
 
         if not placed:
-            new_bin_id = open_new_bin()
-            if new_bin_id is not None:
-                if place_in_bin(new_bin_id, piece):
-                    placed = True
-                    placed_count += 1
-                else:
-                    unfitted_pieces.append(piece)
+            # Ortak kural: parçayı ALABİLEN ilk aracı aç. Alamayan aday
+            # atlanır → eskiden oluşan "boş araç + düşen parça" durumu yok.
+            if open_new_bin(piece) is not None:
+                placed = True
+                placed_count += 1
             else:
                 unfitted_pieces.append(piece)
 

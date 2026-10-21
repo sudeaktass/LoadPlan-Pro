@@ -434,7 +434,7 @@ def get_allowed_pages(role: str) -> list:
         manager  → Dashboard, Optimizasyon, Projelerim, Şirket Ayarları (kullanıcı ekleme hariç)
         operator → Dashboard, Optimizasyon, Projelerim
     """
-    base = ["🚀 Optimizasyon", "📁 Projelerim"]
+    base = ["🚀 Optimizasyon", "🚚 Filo", "📁 Projelerim"]
     if role in ("admin", "manager"):
         base.append("⚙️ Şirket Ayarları")
     return base

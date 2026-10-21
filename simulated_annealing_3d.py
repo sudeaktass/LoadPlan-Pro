@@ -41,6 +41,7 @@ from core_3d import (
     Piece3D, Truck3D, Placement3D, CuttingPlan3D,
     get_all_rotations_3d
 )
+from filo_havuzu import arac_sirala
 from tabu_search_3d import (
     TSSolution, evaluate_solution,
     _create_initial_solution, _plan_to_ts_solution, _max_allowed_bins
@@ -231,7 +232,8 @@ def simulated_annealing_3d_optimization(
         random.seed(seed)
     start_time = time.time()
     piece_info = {p.id: p for p in pieces}
-    trucks_sorted = sorted(trucks, key=lambda t: t.get_volume())
+    # Ortak açma sırası (filo_havuzu.ACMA_SIRASI) — Tabu ile aynı
+    trucks_sorted = arac_sirala(trucks)
     max_bins = _max_allowed_bins(trucks)
 
     pieces_expanded = []

@@ -97,6 +97,15 @@ class ExtremePoints3D:
         # Ağırlık kapasite kontrolü için de aynı toplam kullanılır
         self._weight_sum = 0.0
 
+        # ── DİNGİL YÜKÜ KONTROLÜ (karar D-b) ────────────────────────────
+        # Yükleme Yönetmeliği md. 6(1)(b): toplam ağırlık aşılmasa bile
+        # dingil ağırlıkları aşılamaz. Bu yüzden kapasite kontrolünün
+        # yanına, her ADAY KONUM için dingil kontrolü eklenir.
+        # Araçta çekici+dorse eşleşmesi yoksa (eski araç tablosu, Excel,
+        # deney betikleri) izleyici None olur ve HİÇBİR ŞEY DEĞİŞMEZ.
+        from dingil_yuku import izleyici_olustur
+        self._dingil = izleyici_olustur(truck)
+
     # ------------------------------------------------------------------
     # PUBLIC: MaxRects3D uyumlu arayüz
     # ------------------------------------------------------------------
@@ -124,6 +133,9 @@ class ExtremePoints3D:
 
         best_score = float('inf')
         best_placement = None
+        # Bu parça için en az bir aday konum dingil yüzünden elendi mi?
+        # (sayaç PARÇA düzeyinde tutulur, aday düzeyinde değil)
+        _dingil_elendi = False
 
         # PERFORMANS: döngü sabitleri hoist edildi; X/Y sınır kontrolü ve
         # ez+h ön kontrolü gravity'den ÖNCE yapılır (z >= ez olduğundan
@@ -183,6 +195,15 @@ class ExtremePoints3D:
                     if not valid:
                         continue
 
+            # ── Dingil yükü kontrolü (D-b) ────────────────────────────
+            # Aynı parça, aracın önüne konunca ön dingili/kingpini
+            # aşabilir, arkasına konunca aşmaz → konuma BAĞLI bir kısıt,
+            # bu yüzden ağırlık kontrolü gibi tek seferlik değil.
+            if self._dingil is not None and piece:
+                if not self._dingil_uygun(piece, ey, l):
+                    _dingil_elendi = True
+                    continue
+
             # Skorlama
             score = self._score_placement(ex, ey, z, w, l, h, piece_id)
 
@@ -232,12 +253,98 @@ class ExtremePoints3D:
                             cand, piece, self.placements, self.piece_info)
                         if not valid_s:
                             continue
+                    if self._dingil is not None and piece:
+                        if not self._dingil_uygun(piece, ey, l):
+                            _dingil_elendi = True
+                            continue
                     sc = self._score_placement(ex, ey, z_scan, w, l, h, piece_id)
                     if sc < best_score:
                         best_score = sc
                         best_placement = (ex, ey, z_scan, w, l, h, (0, 0, 0))
 
+        # ── Dingil tarama yedeği (karar S19) ─────────────────────────────
+        # SORUN: EP adayları yalnız yerleşmiş parçaların YANINDA doğar.
+        # Başlangıçta tek aday ön duvardır; ön taraf dingil sınırına
+        # dayanınca yeni parça hiçbir adaya konamaz, dolayısıyla yeni aday
+        # da üretilemez → KİLİTLENME. Ölçümde dorsenin ön %26'sı dolup
+        # 40 parçanın 32'si düşüyordu (ön dingil 7.416/7.500 dolu,
+        # dingil grubu 5.098/24.000 boş).
+        # ÇÖZÜM: yukarıdaki zone-scan ile aynı mekanizma, ama ARKADAN ÖNE
+        # taranır — dingil kısıtı yükü arkaya istediği için geçerli konum
+        # genellikle arkada bulunur ve tarama erken biter.
+        if (best_placement is None and _dingil_elendi
+                and self._dingil is not None):
+            best_placement, best_score = self._dingil_tarama_yedegi(
+                piece_id, w, l, h, piece, best_score)
+
+        if best_placement is None and _dingil_elendi and self._dingil is not None:
+            # Parça yalnızca dingil kısıtı yüzünden yerleşemedi
+            self._dingil.kaydet_red()
+
         return best_placement if best_score != float('inf') else None
+
+    def _dingil_tarama_yedegi(self, piece_id, w, l, h, piece, best_score):
+        """Dorse boyunca ARKADAN ÖNE sistematik tarama (S19).
+
+        Yalnızca dingil kısıtı yüzünden hiçbir EP adayı geçmediğinde
+        çalışır; normal akışta hiç çağrılmaz, bu yüzden maliyeti yoktur.
+        """
+        placing_shape = (self.piece_info.get(piece_id).shape
+                         if piece_id in self.piece_info else 'box')
+        y_step = max(1, l // 4)
+        x_step = max(1, w // 4)
+        best_placement = None
+
+        # Arkadan öne: dingil kısıtı yükü arkaya ister
+        for ey in range(self.length - l, -1, -y_step):
+            if ey < 0:
+                break
+            for ex in range(0, self.width - w + 1, x_step):
+                z_scan = find_lowest_z_position(
+                    ex, ey, w, l, self.placements,
+                    piece_info=self.piece_info, placing_shape=placing_shape)
+                if z_scan + h > self.height:
+                    continue
+                cand = Placement3D(ex, ey, z_scan, w, l, h, piece_id,
+                                   (0, 0, 0), 0)
+                if check_collision_with_list(cand, self.placements,
+                                             piece_info=self.piece_info):
+                    continue
+                if piece and z_scan > 0:
+                    if not check_support_3d(
+                            cand, self.placements,
+                            min_support_ratio=DEFAULT_SUPPORT_RATIO,
+                            piece_info=self.piece_info):
+                        continue
+                    valid_s, _ = check_stacking_rules(
+                        cand, piece, self.placements, self.piece_info)
+                    if not valid_s:
+                        continue
+                if piece and not self._dingil_uygun(piece, ey, l):
+                    continue
+                sc = self._score_placement(ex, ey, z_scan, w, l, h, piece_id)
+                if sc < best_score:
+                    best_score = sc
+                    best_placement = (ex, ey, z_scan, w, l, h, (0, 0, 0))
+            if best_placement is not None:
+                # Arkadan öne gidildiği için ilk geçerli y bandı yeterli:
+                # daha öne gitmek dingil durumunu yalnız kötüleştirir.
+                break
+        return best_placement, best_score
+
+    def _dingil_uygun(self, piece, ey: int, l: int) -> bool:
+        """Aday konum dingil sınırlarını aşıyor mu? (D-b)
+
+        KIP_YALNIZCA_RAPOR kipinde her zaman True döner; ihlalli konumlar
+        yalnızca sayılır (plan Bölüm 6.4 ölçümü).
+        """
+        from dingil_yuku import cm_to_mm_cg
+        cg_mm = cm_to_mm_cg(ey, l)
+        uygun, _ihlal_kg, ihlaller = self._dingil.aday_uygun_mu(
+            piece.weight, cg_mm)
+        if uygun and ihlaller:
+            self._dingil.kaydet_ara_durum()
+        return uygun
 
     def place_piece_3d(self, piece_id: str, placement: Tuple) -> None:
         """Kutuyu yerleştir ve yeni EP'ler üret."""
@@ -255,6 +362,10 @@ class ExtremePoints3D:
             self._wx += _wt * (x + w / 2)
             self._wy += _wt * (y + l / 2)
             self._wz += _wt * (z + h / 2)
+            # Dingil yükleri de artımlı tutulur (aynı mantık)
+            if self._dingil is not None:
+                from dingil_yuku import cm_to_mm_cg
+                self._dingil.ekle(_wt, cm_to_mm_cg(y, l))
 
         # Crainic vd. (2008): 3 yönde projeksiyon ile yeni EP üret
         # DÜZELTME: yerleştirilen kutunun boyutları projeksiyona iletiliyor

@@ -99,9 +99,23 @@ class MaxRects3D:
                     if not valid:
                         continue
             
+            # ── Dingil yükü kontrolü (D-b) ───────────────────────────
+            # MaxRects alternatif motordur (engine='MR'); ortak EP motoru
+            # gibi artımlı izleyici tutmadığı için baştan hesaplanır.
+            if self.truck and piece:
+                from dingil_yuku import cm_to_mm_cg, konum_uygun_mu
+                _yuklu = [
+                    (self.piece_info[p.piece_id].weight,
+                     cm_to_mm_cg(p.y, p.length))
+                    for p in self.placements if p.piece_id in self.piece_info
+                ]
+                if not konum_uygun_mu(self.truck, _yuklu, piece.weight,
+                                      cm_to_mm_cg(y, l)):
+                    continue
+
             # Skor hesapla
             score = self.score_placement_3d(x, y, z, w, l, h, piece_id)
-            
+
             if score < best_score:
                 best_score = score
                 best_placement = (x, y, z, w, l, h, (0, 0, 0))

@@ -91,6 +91,11 @@ class ValidationReport:
     floating:      List[str] = field(default_factory=list)   # desteksiz
     stacking:      List[str] = field(default_factory=list)
     overweight:    List[str] = field(default_factory=list)
+    # Dingil yükü (D-b) — SERT kısıt: Yükleme Yönetmeliği md. 6(1)(b)
+    dingil_ihlalleri: List[str] = field(default_factory=list)
+    # Dingil kontrolü yapılamayan araçlar (eksik veri / tanımsız çekici).
+    # Olurluluğu bozmaz ama SESSİZ GEÇİLMEZ: raporda ayrı satır.
+    dingil_atlandi:   List[str] = field(default_factory=list)
     cog_warnings:  List[str] = field(default_factory=list)
     n_placements:  int = 0
 
@@ -98,12 +103,17 @@ class ValidationReport:
     def feasible(self) -> bool:
         # CoG yumuşak kısıt → olurluluğu bozmaz (yalnız uyarı)
         return not (self.overlaps or self.out_of_bounds or
-                    self.floating or self.stacking or self.overweight)
+                    self.floating or self.stacking or self.overweight or
+                    self.dingil_ihlalleri)
 
     def summary(self) -> str:
         return (f"çakışma={len(self.overlaps)} sınır-dışı={len(self.out_of_bounds)} "
                 f"havada={len(self.floating)} istif-ihlali={len(self.stacking)} "
-                f"aşırı-yük={len(self.overweight)} cog-uyarı={len(self.cog_warnings)}")
+                f"aşırı-yük={len(self.overweight)} "
+                f"dingil-ihlali={len(self.dingil_ihlalleri)} "
+                f"cog-uyarı={len(self.cog_warnings)}"
+                + (f" dingil-atlandı={len(self.dingil_atlandi)}"
+                   if self.dingil_atlandi else ""))
 
 
 def validate_plan(plan, piece_info: Dict, trucks: List) -> ValidationReport:
@@ -195,6 +205,28 @@ def validate_plan(plan, piece_info: Dict, trucks: List) -> ValidationReport:
             rep.overweight.append(
                 f"bin{bid}: {total_w:.0f} kg > kapasite {truck.capacity:.0f} kg")
 
+        # ── 5b. Dingil yükleri (D-b) ─────────────────────────────────────
+        # Yükleme Yönetmeliği md. 6(1)(b): toplam ağırlık aşılmasa bile
+        # dingil ağırlıkları aşılamaz. Araçta çekici+dorse eşleşmesi yoksa
+        # ya da dingil verisi eksikse bu kontrol ATLANIR — ama sessizce
+        # değil: durum ayrı bir satır olarak raporlanır.
+        _eslesme = getattr(truck, 'eslesme', None)
+        if _eslesme is not None:
+            from dingil_yuku import arac_dingil_raporu, cm_to_mm_cg
+            _yukler = [
+                ((getattr(piece_info.get(p.piece_id), 'weight', 0) or 0),
+                 cm_to_mm_cg(p.y, p.length))
+                for p in placements
+            ]
+            _sonuc = arac_dingil_raporu(_eslesme, _yukler)
+            if not _sonuc.kontrol_edildi:
+                rep.dingil_atlandi.append(
+                    f"bin{bid}: dingil kontrolü yapılamadı — "
+                    + "; ".join(_sonuc.uyarilar[-1:]))
+            else:
+                for _ihlal in _sonuc.ihlaller:
+                    rep.dingil_ihlalleri.append(f"bin{bid}: {_ihlal}")
+
         # ── 6. (Yumuşak) Yanal ağırlık merkezi ───────────────────────────
         tw = sum(getattr(piece_info.get(p.piece_id), 'weight', 0) or 0 for p in placements)
         if tw > 1e-6:
@@ -272,7 +304,8 @@ def _run_validation_suite():
                 all_ok = False
             print(f"    [{mark}] {name:16s} — {rep.summary()}")
             for kind in (rep.overlaps, rep.out_of_bounds, rep.floating,
-                         rep.stacking, rep.overweight):
+                         rep.stacking, rep.overweight, rep.dingil_ihlalleri,
+                         rep.dingil_atlandi):
                 for v in kind[:2]:
                     print(f"          • {v}")
     print("\n" + "-" * 74)

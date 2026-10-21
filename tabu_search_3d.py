@@ -43,6 +43,7 @@ from core_3d import (
     get_all_rotations_3d
 )
 from extreme_points_3d import create_packing_engine
+from filo_havuzu import FiloHavuzu, arac_sirala
 from priority_utils import priority_violation_penalty, validate_priority
 
 
@@ -94,22 +95,25 @@ def evaluate_solution(
     engine: str = 'EP'
 ) -> Tuple[float, float, int, CuttingPlan3D]:
     """[KORUNDU] Çözüm değerlendirme — EP motoru ile fiziksel yerleştirme."""
-    trucks_sorted = sorted(trucks, key=lambda t: t.get_volume())
+    # ── ORTAK ARAÇ AÇMA (filo_havuzu) ───────────────────────────────────
+    # Tabu'da binler çözümden gelir; burada her bine bir araç atanır.
+    # Sıra artık tüm algoritmalarla aynı (filo_havuzu.ACMA_SIRASI).
+    havuz = FiloHavuzu(trucks)
 
     bins_global_idx: Dict[int, List[int]] = {}
     for idx, bin_id in enumerate(solution.bin_assignments):
         bins_global_idx.setdefault(bin_id, []).append(idx)
 
-    truck_used_count: Dict[str, int] = {t.id: 0 for t in trucks}
     orig_bin_to_truck: Dict[int, Truck3D] = {}
     for orig_bin_id in sorted(bins_global_idx.keys()):
-        for truck in trucks_sorted:
-            if truck_used_count[truck.id] < truck.available:
-                truck_used_count[truck.id] += 1
-                orig_bin_to_truck[orig_bin_id] = truck
-                break
-        else:
-            orig_bin_to_truck[orig_bin_id] = trucks_sorted[-1]
+        truck = havuz.ac()
+        if truck is None:
+            # Tavan aşıldı (çözümde filodan fazla bin var). Eskiden
+            # trucks_sorted[-1] = EN BÜYÜK araç atanıyordu; sıra tersine
+            # döndüğü için bu artık açıkça en_buyuk() ile yazılıyor —
+            # davranış aynı kalsın diye.
+            truck = havuz.en_buyuk()
+        orig_bin_to_truck[orig_bin_id] = truck
 
     bins_list: List[List[Placement3D]] = []
     truck_assignments: Dict[int, str] = {}
@@ -393,7 +397,10 @@ def tabu_search_3d_optimization(
         random.seed(seed)
     start_time = time.time()
     piece_info = {p.id: p for p in pieces}
-    trucks_sorted = sorted(trucks, key=lambda t: t.get_volume())
+    # Ortak açma sırası (filo_havuzu.ACMA_SIRASI). _create_initial_solution
+    # ve _diversify trucks_sorted[0]'ı referans araç olarak kullanıyor;
+    # yeni sırada bu EN BÜYÜK araç oluyor (eskiden en küçüğüydü).
+    trucks_sorted = arac_sirala(trucks)
     max_bins = _max_allowed_bins(trucks)
 
     pieces_expanded = []

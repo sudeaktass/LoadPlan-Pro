@@ -295,41 +295,97 @@ div[data-testid="stSidebarNav"] {display:none}
     if page == "🚀 Optimizasyon":
 
         st.header("🚚 Araç Filosu")
-        if "df_trucks" not in st.session_state:
-            st.session_state.df_trucks = pd.DataFrame({
-                "ID":            ["Küçük-1", "Orta-1", "Büyük-1"],
-                "Genişlik (cm)": [170, 180, 240],
-                "Uzunluk (cm)":  [260, 420, 600],
-                "Yükseklik (cm)":[180, 220, 270],
-                "Kapasite (kg)": [6000, 7000, 8000],
-                "Adet":          [1, 2, 1],
-            })
-        # KRİTİK: data_editor'a stabil bir 'key' verilir ve çıktısı ASLA
-        # editörün veri kaynağına (st.session_state.df_trucks) geri yazılmaz.
-        # Geri yazılırsa Streamlit edit-delta'larını edilmiş veriye TEKRAR
-        # uygular → yazarken sıfırlanma/silinme olur. Düzenlenmiş hali ayrı
-        # 'df_trucks_live' anahtarında tutulur (diğer sayfalar bunu okur).
-        df_trucks = st.data_editor(st.session_state.df_trucks, num_rows="dynamic",
-            width="stretch",
-            key="df_trucks_editor",
-            column_config={
-                "ID":             st.column_config.TextColumn("ID", required=True),
-                "Genişlik (cm)":  st.column_config.NumberColumn("G(cm)",  min_value=1),
-                "Uzunluk (cm)":   st.column_config.NumberColumn("U(cm)",  min_value=1),
-                "Yükseklik (cm)": st.column_config.NumberColumn("Y(cm)",  min_value=1),
-                "Kapasite (kg)":  st.column_config.NumberColumn("Kap(kg)",min_value=1),
-                "Adet":           st.column_config.NumberColumn("Adet",   min_value=1),
-            })
-        st.session_state.df_trucks_live = df_trucks
-        c1,c2 = st.columns(2)
-        # Düzenleme sırasında boş hücre (NaN) olabilir → fillna ile koru
-        _adet_t = df_trucks["Adet"].fillna(0)
-        _kap_t  = df_trucks["Kapasite (kg)"].fillna(0)
-        c1.metric("Toplam Araç",    int(_adet_t.sum()))
-        c2.metric("Kapasite", f'{float((_kap_t * _adet_t).sum()):,.0f} kg')
-        st.markdown("---")
 
-        st.header("🎯 Algoritma")
+        # ── Filo sayfasından çekici+dorse seçildiyse ONU göster ──────────
+        # Aksi hâlde kenar çubuğu eski tabloyu gösterip "4 araç / 28.000 kg"
+        # derken optimizasyon başka bir filoyla çalışıyordu.
+        from filo_secimi import aktif_filo, eski_tablo_ayarla
+        _sb_ck, _sb_dr = aktif_filo()
+        if _sb_ck and _sb_dr:
+            from filo_havuzu import havuz_olustur_cekici_dorse
+            _sb_havuz = havuz_olustur_cekici_dorse(_sb_ck, _sb_dr)
+            _sb_trucks = list(_sb_havuz.trucks)
+
+            st.success(f"✅ **Çekici + dorse filosu** — {len(_sb_ck)} çekici, "
+                       f"{len(_sb_dr)} dorse")
+            st.caption("🚚 Filo sayfasında seçildi. Bu liste bir **tavandır**; "
+                       "hangi araçların açılacağına algoritma karar verir.")
+
+            _sb_satir = []
+            for _t in _sb_trucks:
+                _es = _t.eslesme
+                _sb_satir.append({
+                    "Çekici": _es.cekici.plaka,
+                    "Dorse": _es.dorse.plaka,
+                    "Hacim (m³)": round(_es.dorse.ic_hacim_m3, 1),
+                    "Faydalı yük (kg)": int(_es.faydali_yuk_kg),
+                    "Dingil": "✅" if _es.dingil_kontrol_edilebilir else "⚠️",
+                })
+            st.dataframe(pd.DataFrame(_sb_satir), hide_index=True,
+                         width="stretch")
+
+            _c1, _c2 = st.columns(2)
+            _c1.metric("Toplam Araç", len(_sb_trucks))
+            _c2.metric("Faydalı yük",
+                       f'{sum(t.capacity for t in _sb_trucks):,.0f} kg')
+            if any(not t.eslesme.dingil_kontrol_edilebilir for t in _sb_trucks):
+                st.warning("⚠️ Bazı araçlarda dingil kontrolü yapılamıyor — "
+                           "eksik veri. 🚚 Filo sayfasından tamamlayın.")
+            if len(_sb_dr) > len(_sb_ck):
+                st.warning(f"⚠️ {len(_sb_dr) - len(_sb_ck)} dorse için boş "
+                           f"çekici yok → o dorseler açılamaz.")
+
+            if st.button("↩️ Eski araç tablosuna dön", width="stretch",
+                         key="sb_filo_birak"):
+                eski_tablo_ayarla(True)
+                st.rerun()
+
+            df_trucks = st.session_state.get(
+                "df_trucks_live", st.session_state.get("df_trucks",
+                                                       pd.DataFrame()))
+            st.markdown("---")
+            st.header("🎯 Algoritma")
+            _filo_sayfasindan = True
+        else:
+            _filo_sayfasindan = False
+
+        # Çekici+dorse filosu seçilmediyse ESKİ araç tablosu kullanılır
+        if not _filo_sayfasindan:
+            if "df_trucks" not in st.session_state:
+                st.session_state.df_trucks = pd.DataFrame({
+                    "ID":            ["Küçük-1", "Orta-1", "Büyük-1"],
+                    "Genişlik (cm)": [170, 180, 240],
+                    "Uzunluk (cm)":  [260, 420, 600],
+                    "Yükseklik (cm)":[180, 220, 270],
+                    "Kapasite (kg)": [6000, 7000, 8000],
+                    "Adet":          [1, 2, 1],
+                })
+            # KRİTİK: data_editor'a stabil bir 'key' verilir ve çıktısı ASLA
+            # editörün veri kaynağına (st.session_state.df_trucks) geri yazılmaz.
+            # Geri yazılırsa Streamlit edit-delta'larını edilmiş veriye TEKRAR
+            # uygular → yazarken sıfırlanma/silinme olur. Düzenlenmiş hali ayrı
+            # 'df_trucks_live' anahtarında tutulur (diğer sayfalar bunu okur).
+            df_trucks = st.data_editor(st.session_state.df_trucks, num_rows="dynamic",
+                width="stretch",
+                key="df_trucks_editor",
+                column_config={
+                    "ID":             st.column_config.TextColumn("ID", required=True),
+                    "Genişlik (cm)":  st.column_config.NumberColumn("G(cm)",  min_value=1),
+                    "Uzunluk (cm)":   st.column_config.NumberColumn("U(cm)",  min_value=1),
+                    "Yükseklik (cm)": st.column_config.NumberColumn("Y(cm)",  min_value=1),
+                    "Kapasite (kg)":  st.column_config.NumberColumn("Kap(kg)",min_value=1),
+                    "Adet":           st.column_config.NumberColumn("Adet",   min_value=1),
+                })
+            st.session_state.df_trucks_live = df_trucks
+            c1,c2 = st.columns(2)
+            # Düzenleme sırasında boş hücre (NaN) olabilir → fillna ile koru
+            _adet_t = df_trucks["Adet"].fillna(0)
+            _kap_t  = df_trucks["Kapasite (kg)"].fillna(0)
+            c1.metric("Toplam Araç",    int(_adet_t.sum()))
+            c2.metric("Kapasite", f'{float((_kap_t * _adet_t).sum()):,.0f} kg')
+            st.markdown("---")
+
+            st.header("🎯 Algoritma")
 
         pass  # tooltip motoru ana sayfada (aşağıda)
 
@@ -337,8 +393,8 @@ div[data-testid="stSidebarNav"] {display:none}
                             key="_algo_mode")
 
         st.info(
-            "🚛 Tüm algoritmalar çalışmadan önce\n"
-            "otomatik minimum araç seçimi yapar"
+            "🚛 Girdiğiniz filo bir **tavandır**.\n"
+            "Hangi araçların kullanılacağına algoritma karar verir."
         )
         sel_algo  = None
         sel_algos = []
@@ -364,7 +420,12 @@ div[data-testid="stSidebarNav"] {display:none}
             st.caption(f"⏱️ {ALGORITHMS[sel_algo]['time']}")
 
             st.markdown("---")
-            st.caption("**🔬 İleri Düzey** — Daha uzun sürer, daha iyi sonuç verir")
+            # KARAR A (21 Ekim 2026): Multi-Start SA, Island GA ve BO-HPO
+            # DONDURULDU — ana karşılaştırmadan ve deneyden çıktılar.
+            # Kodları duruyor, mantıklarına dokunulmadı; varyant analizi
+            # için buradan çalıştırılabilirler.
+            st.caption("**📦 Arşiv / varyantlar** — dondurulmuş, "
+                       "ana karşılaştırmaya girmez")
             _adv_labels = []
             for k in _adv_keys:
                 _disabled = (k == "bayesian" and not HAS_BAYESIAN) or \
@@ -394,8 +455,10 @@ div[data-testid="stSidebarNav"] {display:none}
         else:
             _c1, _c2 = st.columns(2)
             if _c1.button("✅ Hepsini Seç", width="stretch"):
-                for _k in ALGORITHMS:
-                    st.session_state[f"cmp_{_k}"] = True
+                # Dondurulmuş varyantlar (advanced) seçilmez — karar A
+                for _k, _v in ALGORITHMS.items():
+                    if not _v["advanced"]:
+                        st.session_state[f"cmp_{_k}"] = True
             if _c2.button("❌ Hepsini Temizle", width="stretch"):
                 for _k in ALGORITHMS:
                     st.session_state[f"cmp_{_k}"] = False
@@ -520,17 +583,15 @@ div[data-testid="stSidebarNav"] {display:none}
             "Bu seçenek ek olarak tüm parçaları öne sıkıştırır."
         )
 
-        st.markdown("---")
-        st.header("🚛 Akıllı Araç Seçimi")
-        use_fleet_opt = st.checkbox(
-            "Otomatik Araç Seçimi",
-            value=False,
-            help="Açıksa: Her çalıştırmadan önce filodaki en iyi araç kombinasyonunu bulur, "
-                 "sonra seçilen algoritmayı o araçlarla çalıştırır.\n\n"
-                 "Kapalıysa: Sidebar'daki araç tablosundaki tüm araçları kullanır.",
-            key="use_fleet_opt_toggle",
-        )
-        if use_fleet_opt:
+        # ── KARAR K (21 Ekim 2026): "Akıllı Araç Seçimi" GİZLENDİ ────────
+        # fleet_optimizer_3d K4 ile çelişiyor: K4'e göre kullanıcının
+        # girdiği filo bir TAVANDIR ve araç seçimini algoritma kendi yapar
+        # (filo_havuzu). Bu düğme ise algoritmadan önce bir araç
+        # kombinasyonu sabitliyordu — yani sorun #1'in başka bir biçimi.
+        # Kod SİLİNMEDİ: ileride "filo büyüklüğü ve bileşimi" senaryosu
+        # için kullanılabilir (Koç ve ark. 2016, FSM ↔ HF ayrımı).
+        use_fleet_opt = False
+        if False:
             st.caption(
                 "⚠️ Her çalıştırmaya toplam bütçenin **~%35'i** ek süre ekler. "
                 "Örn: 120sn bütçede ilk 42sn araç seçimine gider."
@@ -1004,6 +1065,18 @@ def build_pieces_from_load_rules(load_rules_df: "pd.DataFrame", geom_store: dict
 
 
 def build_trucks(df):
+    """Optimizasyonda kullanılacak araç listesi.
+
+    Filo sayfasında (🚚 Filo) bir çekici+dorse filosu seçildiyse O kullanılır;
+    seçilmediyse kenar çubuğundaki eski araç tablosu kullanılır. Böylece iki
+    yol da çalışmaya devam eder (göç kararı H).
+    """
+    from filo_secimi import aktif_filo
+    _ck, _dr = aktif_filo()
+    if _ck and _dr:
+        from filo_havuzu import havuz_olustur_cekici_dorse
+        return list(havuz_olustur_cekici_dorse(_ck, _dr).trucks)
+
     trucks = []
     sizes = {260:"Küçük", 420:"Orta", 600:"Büyük"}
     for i, (_, row) in enumerate(df.iterrows(), 1):
@@ -1042,30 +1115,61 @@ def run_algo(key, pieces, trucks, _bypass_phase1=False, **kw):
         _bypass_phase1: True → Faz 1'i atla, trucks olduğu gibi kullan
                         (fallback retry için tam filo geçildiğinde kullanılır)
     """
-    # ── Orijinal tam filo — rescue için sakla (Phase 1 trucks'ı daraltır) ──
+    # ── Orijinal tam filo — kurtarma adımları için sakla ──────────────────
+    # NOT: Faz 1 artık filoyu DARALTMIYOR (karar K4/B.4), bu yüzden
+    # _full_fleet ile trucks aynı listedir. Değişken korunuyor: kurtarma
+    # adımlarının her zaman tam filoyu gördüğü açık kalsın.
     _full_fleet = list(trucks)
 
     if not _bypass_phase1:
-        # ── FAZ 1+2: Minimum Araç Seçimi + Kapasite Kontrolü ─────────────
-        from minimum_vehicle_selector import minimum_vehicle_selector
-        _phase1 = minimum_vehicle_selector(pieces, trucks)
-        _selected_trucks = _phase1.selected_trucks if _phase1.selected_trucks else trucks
+        # ── FAZ 1: YALNIZCA yeterlilik ön kontrolü (karar K4 / B.4) ──────
+        # DEĞİŞTİ: Eskiden minimum_vehicle_selector FFD simülasyonuyla
+        # birkaç araç seçiyor ve algoritmalara `trucks = _selected_trucks`
+        # ile YALNIZCA onları veriyordu → algoritmalar başka bir araç
+        # bileşimi deneyemiyordu (sorun #1). Artık filo bir TAVANDIR ve
+        # hangi araçların açılacağına algoritma karar verir (filo_havuzu).
+        from minimum_vehicle_selector import filo_on_kontrol
+        _phase1_log = filo_on_kontrol(pieces, trucks)
         try:
             import streamlit as st
-            st.session_state["_phase1_log"] = _phase1.log_lines
+            st.session_state["_phase1_log"] = _phase1_log
         except Exception:
             pass
-        print("[1/4] 🚛 Minimum araç seçimi yapılıyor...")
-        for _line in _phase1.log_lines:
+        print("[1/4] 🚛 Filo yeterlilik ön kontrolü...")
+        for _line in _phase1_log:
             print(f"    {_line}")
-        print(f"[2/4] 🔒 Kapasite yeterlilik kontrolü → ✅ TAMAM")
+        print(f"[2/4] 🔒 Araç seçimi algoritmaya bırakıldı (tavan: tüm filo)")
         print(f"[3/4] 🧬 {key} çalışıyor...")
-        trucks = _selected_trucks
     else:
         print(f"[3/4] 🧬 {key} çalışıyor (fallback retry, tam filo)...")
     # ────────────────────────────────────────────────────────────────────
 
     def _ensure_all_placed(plan):
+        """Kurtarma + küçültme — her algoritmanın ortak çıkışı."""
+        return _kucultme_uygula(_kurtarma_uygula(plan))
+
+    def _kucultme_uygula(plan):
+        """S18 — Kang & Park (2003) IFFD 2. adımı.
+
+        "Gerektikçe aç" kuralı araç SAYISINI iyi tutuyor, ama son araç tek
+        bir parça için açıldığında en büyüğü seçiliyor; K1'in 2. ölçütü
+        (toplam araç hacmi) ve doluluk gereksiz kötüleşiyor. Küçültme
+        yalnız araç TİPİNİ değiştirir, parçalar yerinde kalır → araç sayısı
+        ve geçerlilik korunur.
+        """
+        if plan is None:
+            return plan
+        try:
+            from filo_havuzu import kucult
+            _pi = {p.id: p for p in pieces}
+            _n = kucult(plan, _full_fleet, _pi)
+            if _n:
+                print(f"    [KUCULTME] {_n} arac daha kucuk tipe indirildi")
+        except Exception as _e:                      # noqa: BLE001
+            print(f"    [KUCULTME] atlandi: {_e}")
+        return plan
+
+    def _kurtarma_uygula(plan):
         """
         Algoritma döndürdükten hemen sonra çağrılır — 3 kademeli garanti:
           A) rescue_placement (TAM filo ile — Phase 1'in kısıtladığı filo değil)
@@ -1087,7 +1191,8 @@ def run_algo(key, pieces, trucks, _bypass_phase1=False, **kw):
               "-- 3 kademeli kurtarma basliyor")
 
         # ── Kademe A: rescue_placement — TAM filo (_full_fleet) kullan ──────
-        # ÖNEMLİ: 'trucks' değil '_full_fleet' — Phase 1 filoyu daraltmış olabilir
+        # NOT: Faz 1 artık daraltma yapmadığı için ikisi aynı; yine de
+        # kurtarmanın tam filoyu kullandığı açıkça belli olsun diye durur.
         try:
             plan = rescue_placement(pieces, plan, _full_fleet)
             unplaced = get_unplaced_pieces(pieces, plan)
@@ -1388,6 +1493,123 @@ def run_nfp(pieces, trucks, resolution=2.0, margin=0.5):
     return plan
 
 
+def _show_fleet_report(plan, pieces, trucks):
+    """Araç başına doluluk (R-a) ve dingil yükleri (D-b).
+
+    U_V tanımı DEĞİŞMİYOR: gerçek hacim (silindirde πr²h) ÷ aracın hacmi —
+    yani mevcut U_G tanımı. Yanına ağırlık kullanımı U_W eklenir.
+    "Bağlayıcı ölçü" seçimi S11 kararını beklediği için burada YAPILMIYOR;
+    ikisi de ayrı ayrı gösteriliyor.
+    """
+    if not trucks or not plan or not plan.bins:
+        return
+    from core_3d import piece_used_volume
+    from doluluk import AracDoluluk, PlanDoluluk
+
+    piece_info = {p.id: p for p in pieces}
+    tid = {t.id: t for t in trucks}
+    atama = plan.truck_assignments or {}
+
+    satirlar, dingil_satirlari, uyarilar = [], [], []
+    rapor = PlanDoluluk()
+
+    for bid, bps in enumerate(plan.bins):
+        if not bps:
+            continue
+        t = tid.get(atama.get(bid))
+        if t is None:
+            continue
+        gercek = sum(piece_used_volume(p, piece_info) for p in bps)
+        yuk_kg = sum(getattr(piece_info.get(p.piece_id), "weight", 0) or 0
+                     for p in bps)
+        es = getattr(t, "eslesme", None)
+        ad = (f"{es.cekici.plaka} + {es.dorse.plaka}") if es else t.id
+
+        a = AracDoluluk(
+            etiket=ad, gercek_hacim=gercek,
+            dis_kutu_hacim=sum(p.get_volume() for p in bps),
+            arac_hacim=t.get_volume(), yuk_kg=yuk_kg,
+            faydali_yuk_kg=t.capacity,
+            bos_agirlik_kg=((es.cekici.bos_agirlik_kg + es.dorse.bos_agirlik_kg)
+                            if es else 0.0),
+        )
+        rapor.araclar.append(a)
+        satirlar.append({
+            "Araç": ad,
+            "Parça": len(bps),
+            "U_V (hacim)": f"%{(a.u_v or 0) * 100:.1f}",
+            "U_W (ağırlık)": f"%{(a.u_w or 0) * 100:.1f}",
+            "Yük (kg)": f"{yuk_kg:,.0f}".replace(",", "."),
+            "Faydalı yük (kg)": f"{t.capacity:,.0f}".replace(",", "."),
+        })
+
+        # ── Dingil yükleri ──
+        if es is None:
+            continue
+        from dingil_yuku import arac_dingil_raporu, cm_to_mm_cg
+        yukler = [((getattr(piece_info.get(p.piece_id), "weight", 0) or 0),
+                   cm_to_mm_cg(p.y, p.length)) for p in bps]
+        sonuc = arac_dingil_raporu(es, yukler)
+        if not sonuc.kontrol_edildi:
+            uyarilar.append(f"**{ad}** — " + (sonuc.uyarilar[-1]
+                                              if sonuc.uyarilar else
+                                              "dingil kontrolü yapılamadı"))
+            continue
+        s = es.dingil_sinirlari
+        for etiket, yuk, sinir in (
+                ("ön dingil", sonuc.yukler.on_dingil_kg, s.on_dingil_kg),
+                ("tahrik dingili", sonuc.yukler.tahrik_dingil_kg,
+                 s.tahrik_dingil_kg),
+                ("kingpin", sonuc.yukler.kingpin_kg, s.kingpin_kg),
+                ("dingil grubu", sonuc.yukler.dingil_grubu_kg,
+                 s.dingil_grubu_kg),
+                ("toplam", sonuc.yukler.toplam_kg, s.toplam_kg)):
+            if sinir is None:
+                continue
+            asim = yuk > sinir
+            dingil_satirlari.append({
+                "Araç": ad, "Sınır": etiket,
+                "Yük (kg)": f"{yuk:,.0f}".replace(",", "."),
+                "Limit (kg)": f"{sinir:,.0f}".replace(",", "."),
+                "Oran": f"%{yuk / sinir * 100:.0f}" if sinir else "—",
+                "Durum": "🔴 AŞIM" if asim else "✅",
+            })
+        uyarilar.extend(f"**{ad}** — {u}" for u in sonuc.uyarilar
+                        if "VARSAYIM" in u or "yapılamadı" in u)
+
+    if not satirlar:
+        return
+
+    _etiket = (f"📊 Araç başına doluluk ve dingil yükleri — "
+               f"{len(satirlar)} araç")
+    with st.expander(_etiket, expanded=False):
+        st.markdown("**Doluluk (R-a)**")
+        st.dataframe(pd.DataFrame(satirlar), hide_index=True, width="stretch")
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("U_V (toplam)", f"%{(rapor.u_v or 0) * 100:.1f}",
+                  help="Gerçek hacim ÷ kullanılan araçların hacmi — "
+                       "mevcut U_G tanımı, değişmedi.")
+        c2.metric("U_W (toplam)", f"%{(rapor.u_w or 0) * 100:.1f}",
+                  help="Yük kütlesi ÷ toplam faydalı yük.")
+        c3.metric("U_V en düşük", f"%{(rapor.u_v_en_dusuk or 0) * 100:.1f}")
+        c4.metric("Toplam boş ağırlık",
+                  f"{rapor.toplam_bos_agirlik_kg:,.0f} kg".replace(",", "."),
+                  help="Taşınan ölü ağırlık. YALNIZCA raporlanır; "
+                       "sıralamada kullanılmaz (K1'in 2. ölçütü açık).")
+        st.caption(
+            f"Araç başına U_V ortalaması: "
+            f"%{(rapor.u_v_ortalama or 0) * 100:.1f} — heterojen filoda "
+            f"toplam oranla ayrışır, bu yüzden ikisi birlikte veriliyor.")
+
+        if dingil_satirlari:
+            st.markdown("**Dingil yükleri (D-b)** — "
+                        "Yükleme Yönetmeliği md. 6(1)(b)")
+            st.dataframe(pd.DataFrame(dingil_satirlari), hide_index=True,
+                         width="stretch")
+        for u in dict.fromkeys(uyarilar):
+            st.warning(f"⚠️ {u}")
+
+
 def show_kpis(plan, pieces, trucks=None):
     placed       = sum(len(b) for b in plan.bins)
     total        = sum(p.quantity for p in pieces)
@@ -1572,6 +1794,9 @@ def show_kpis(plan, pieces, trucks=None):
                                lat_ok, lon_ok, vert_ok))
         if has_issue:
             _fix_rows.append((truck_id, det, truck, cap_exceeded, lat_ok, lon_ok, vert_ok, bin_weight))
+
+    # ── 1b. Araç başına doluluk ve dingil yükleri (R-a + D-b) ───────────────
+    _show_fleet_report(plan, pieces, trucks)
 
     # ── 2. Özet tablo + düzeltme önerileri → tek kapalı expander ─────────────
     _ok_count  = sum(1 for r in _balance_rows if r[1] == "✅")
@@ -2396,6 +2621,24 @@ if page == "🚀 Optimizasyon":
     # Silinen satır kalıcı olarak kaldırılır, yeni yük eklenince geri gelmez.
     # Algoritma yalnızca bu tablodaki parçaları kullanır.
     # ═══════════════════════════════════════════════════════════════════════════
+    # ── Hangi filo kullanılıyor? (ana ekranda da görünsün) ───────────────
+    from filo_secimi import aktif_filo as _aktif_filo
+    _ana_ck, _ana_dr = _aktif_filo()
+    if _ana_ck and _ana_dr:
+        _ana_plakalar = ", ".join(d.plaka for d in _ana_dr[:4])
+        if len(_ana_dr) > 4:
+            _ana_plakalar += f" (+{len(_ana_dr) - 4})"
+        st.info(
+            f"🚚 **Çekici + dorse filosu kullanılıyor** — {len(_ana_ck)} çekici, "
+            f"{len(_ana_dr)} dorse ({_ana_plakalar}). Kütle kapasitesi KTY "
+            f"md.128'den hesaplanıyor; her yerleştirmede dingil yükü "
+            f"kontrol ediliyor. Değiştirmek için → 🚚 Filo sayfası."
+        )
+    else:
+        st.caption("🚛 Kenar çubuğundaki araç tablosu kullanılıyor. "
+                   "Çekici/dorse ayrımı, mevzuat kapasitesi ve dingil "
+                   "kontrolü için → 🚚 Filo sayfası.")
+
     st.subheader("📋 Yük Listesi & Yerleştirme Kuralları")
     st.caption("Bu tablo algoritmaya gönderilecek yük listesidir. "
                "Satır silin, adet/kural değiştirin — algoritma yalnızca bu tabloyu kullanır.")
@@ -3117,6 +3360,14 @@ if page == "🚀 Optimizasyon" and "last_results" in st.session_state:
         else:
             _r4.caption("🧾 Genel Rapor: karşılaştırmalı modda "
                         "(≥2 algoritma) aktif olur.")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SAYFA: FİLO (karar J) — çekici ve dorse kayıtları
+# ─────────────────────────────────────────────────────────────────────────────
+elif page == "🚚 Filo":
+    import filo_sayfasi
+    filo_sayfasi.render()
 
 
 # ─────────────────────────────────────────────────────────────────────────────

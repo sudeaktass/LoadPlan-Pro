@@ -37,6 +37,7 @@ from core_3d import (
 # Eski sürüm MaxRects3D kullanıyordu: destek oranı 0.95 (EP'de 0.75) ve eski
 # priority*50 mantığı → adil olmayan farklı fizik. Artık EP kullanılıyor.
 from extreme_points_3d import create_packing_engine
+from filo_havuzu import FiloHavuzu, arac_ac
 from priority_utils import priority_violation_penalty
 
 
@@ -316,27 +317,31 @@ def pack_trial_3d(
     placements_by_bin = {}
     truck_assignments = {}
     open_packers = {}          # bin_id → packer
-    truck_used_count = {t.id: 0 for t in trucks}
     unfitted_count = 0
 
     if len(trucks) == 0:
         return {}, {}, len(trial_list)
 
-    trucks_sorted = sorted(trucks, key=lambda t: t.get_volume())
+    havuz = FiloHavuzu(trucks)          # ortak araç açma (sıra: filo_havuzu.ACMA_SIRASI)
 
-    def _open_new_bin():
-        for truck in trucks_sorted:
-            if truck_used_count[truck.id] < truck.available:
-                bid = len(open_packers)
-                truck_used_count[truck.id] += 1
-                open_packers[bid] = create_packing_engine(
-                    truck.width, truck.length, truck.height,
-                    engine='EP', heuristic='CP',
-                    truck=truck, piece_info=piece_info)
-                placements_by_bin[bid] = []
-                truck_assignments[bid] = truck.id
-                return bid
-        return None
+    # ── ORTAK ARAÇ AÇMA (filo_havuzu) — bkz. ffd_3d.py ──────────────────
+    def _bin_olustur(truck):
+        bid = len(open_packers)
+        open_packers[bid] = create_packing_engine(
+            truck.width, truck.length, truck.height,
+            engine='EP', heuristic='CP',
+            truck=truck, piece_info=piece_info)
+        placements_by_bin[bid] = []
+        truck_assignments[bid] = truck.id
+        return bid
+
+    def _bin_iptal(bid):
+        open_packers.pop(bid, None)
+        placements_by_bin.pop(bid, None)
+        truck_assignments.pop(bid, None)
+
+    def _open_new_bin(piece=None, yerlestir=None):
+        return arac_ac(havuz, piece, _bin_olustur, yerlestir, _bin_iptal)
 
     def _try_place(bid, piece_id, w, l, h):
         packer = open_packers[bid]
@@ -360,8 +365,10 @@ def pack_trial_3d(
                 placed = True
                 break
         if not placed:
-            new_bid = _open_new_bin()
-            if new_bid is not None and _try_place(new_bid, piece_id, w, l, h):
+            # Ortak kural: parçayı ALABİLEN ilk aracı aç (alamayan atlanır)
+            if _open_new_bin(
+                    piece,
+                    lambda bid: _try_place(bid, piece_id, w, l, h)) is not None:
                 placed = True
         if not placed:
             unfitted_count += 1

@@ -103,13 +103,22 @@ class Placement3D:
 
 @dataclass
 class Truck3D:
-    """3D Kamyonet bilgileri"""
+    """3D Kamyonet bilgileri
+
+    `eslesme`: V-B filo modelindeki çekici+dorse eşleşmesi (filo_modeli.Eslesme).
+    İSTEĞE BAĞLIDIR ve varsayılanı None'dır — eski araç tablosundan,
+    Excel'den ya da deney betiklerinden gelen Truck3D'ler bu alanı
+    doldurmaz ve aynen çalışmaya devam eder. Dolu olduğunda dingil
+    kontrolü ve mevzuat kaynaklı kapasite bilgisi kullanılabilir hâle
+    gelir (bkz. filo_havuzu.eslesme_to_truck3d).
+    """
     id: str
     width: int
     length: int
     height: int
     capacity: float
     available: int
+    eslesme: Optional[object] = None
 
     def get_volume(self) -> int:
         return self.width * self.length * self.height

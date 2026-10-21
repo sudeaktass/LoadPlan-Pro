@@ -24,6 +24,7 @@ from core_3d import (
     check_support_3d, check_stacking_rules,
     DEFAULT_SUPPORT_RATIO, piece_used_volume as _actual_used_volume
 )
+from filo_havuzu import FiloHavuzu
 from priority_utils import sort_piece_list_inplace, validate_priority, get_priority_zone
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -133,6 +134,20 @@ class WallPacker2D:
                         if p.piece_id in self.piece_info)
                     if current_weight + piece.weight > self.truck.capacity:
                         return None
+                    # ── Dingil yükü kontrolü (D-b) ───────────────────
+                    # Layer Building ortak EP motorunu kullanmıyor, kendi
+                    # yerleştiricisi var → artımlı izleyici beslenemiyor;
+                    # ağırlık toplamıyla aynı mantıkta baştan hesaplanır.
+                    from dingil_yuku import cm_to_mm_cg, konum_uygun_mu
+                    _yuklu = [
+                        (self.piece_info[p.piece_id].weight,
+                         cm_to_mm_cg(p.y, p.length))
+                        for p in all_loaded if p.piece_id in self.piece_info
+                    ]
+                    if not konum_uygun_mu(
+                            self.truck, _yuklu, piece.weight,
+                            cm_to_mm_cg(candidate.y, candidate.length)):
+                        continue
                 score = cz * 10000 + cx * 10
                 if score < best_score:
                     best_score     = score
@@ -248,8 +263,12 @@ def layer_building_3d_optimization(
     start_time = time.time()
     piece_info  = {p.id: p for p in pieces}
 
-    # Büyük araçları önce dene (daha az araç kullan)
-    trucks_sorted = sorted(trucks, key=lambda t: t.get_volume(), reverse=True)
+    # ── ORTAK ARAÇ AÇMA (filo_havuzu) ───────────────────────────────────
+    # Layer Building zaten "büyükten küçüğe" açıyordu; artık bu sıra tüm
+    # algoritmalar için tek parametre (filo_havuzu.ACMA_SIRASI). Varsayılan
+    # değer büyükten küçüğe olduğu sürece davranış DEĞİŞMEZ.
+    havuz = FiloHavuzu(trucks)
+    trucks_sorted = havuz.sirali
 
     # quantity'yi aç
     piece_list: List[Piece3D] = []
@@ -270,7 +289,6 @@ def layer_building_3d_optimization(
     all_layer_results: List[LayerResult] = []
     bins_list:         List[List[Placement3D]] = []
     truck_assignments: Dict[int, str] = {}
-    truck_used_count:  Dict[str, int]  = {t.id: 0 for t in trucks}
     placed_count  = 0
     remaining_pieces = list(piece_list)
 
@@ -278,8 +296,8 @@ def layer_building_3d_optimization(
         if not remaining_pieces:
             break
 
-        while truck_used_count[truck.id] < truck.available and remaining_pieces:
-            truck_used_count[truck.id] += 1
+        while havuz.musait_mi(truck) and remaining_pieces:
+            havuz.ayir(truck)
             bin_id = len(bins_list)
 
             truck_w = truck.width
@@ -437,7 +455,7 @@ def layer_building_3d_optimization(
 
             if not bin_placements:
                 # Hiç parça yerleştirilemedi — bu kamyon yaklaşımını geri al
-                truck_used_count[truck.id] -= 1
+                havuz.geri_al(truck)
                 remaining_pieces = remaining_in_truck + list(items_to_place)
                 break
 

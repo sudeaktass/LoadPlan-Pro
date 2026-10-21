@@ -26,6 +26,7 @@ from core_3d import (
     get_all_rotations_3d
 )
 from extreme_points_3d import create_packing_engine
+from filo_havuzu import FiloHavuzu, arac_ac
 from priority_utils import priority_violation_penalty, priority_sort_key
 
 Individual = List[int]   # Index permütasyonu pieces_expanded üzerinde
@@ -53,28 +54,33 @@ def _pack_individual(
 
     Döndürülen 3. eleman yerleşmeyen PARÇA LİSTESİ'dir (eski sürüm yalnız
     sayı döndürüyordu; CuttingPlan3D.unfitted_pieces boş kalıyordu)."""
-    trucks_sorted = sorted(trucks, key=lambda t: t.get_volume())
+    havuz = FiloHavuzu(trucks)          # ortak araç açma (sıra: filo_havuzu.ACMA_SIRASI)
     open_bins: Dict[int, dict] = {}
     placements_by_bin: Dict[int, List[Placement3D]] = {}
     truck_assignments: Dict[int, str] = {}
-    truck_used_count: Dict[str, int] = {t.id: 0 for t in trucks}
     unfitted: List[Piece3D] = []
 
-    def open_new_bin() -> Optional[int]:
-        for truck in trucks_sorted:
-            if truck_used_count[truck.id] < truck.available:
-                bid = len(open_bins)
-                truck_used_count[truck.id] += 1
-                packer = create_packing_engine(
-                    truck.width, truck.length, truck.height,
-                    engine=engine, heuristic=heuristic,
-                    truck=truck, piece_info=piece_info
-                )
-                open_bins[bid] = {'truck': truck, 'packer': packer}
-                placements_by_bin[bid] = []
-                truck_assignments[bid] = truck.id
-                return bid
-        return None
+    # ── ORTAK ARAÇ AÇMA (filo_havuzu) — bkz. ffd_3d.py ──────────────────
+    def _bin_olustur(truck: Truck3D) -> int:
+        bid = len(open_bins)
+        packer = create_packing_engine(
+            truck.width, truck.length, truck.height,
+            engine=engine, heuristic=heuristic,
+            truck=truck, piece_info=piece_info
+        )
+        open_bins[bid] = {'truck': truck, 'packer': packer}
+        placements_by_bin[bid] = []
+        truck_assignments[bid] = truck.id
+        return bid
+
+    def _bin_iptal(bid: int) -> None:
+        open_bins.pop(bid, None)
+        placements_by_bin.pop(bid, None)
+        truck_assignments.pop(bid, None)
+
+    def open_new_bin(piece: Optional[Piece3D] = None) -> Optional[int]:
+        return arac_ac(havuz, piece, _bin_olustur,
+                       lambda bid: place_in_bin(bid, piece), _bin_iptal)
 
     def place_in_bin(bin_id: int, piece: Piece3D) -> bool:
         packer = open_bins[bin_id]['packer']
@@ -111,8 +117,8 @@ def _pack_individual(
                 placed = True
                 break
         if not placed:
-            new_bin_id = open_new_bin()
-            if new_bin_id is not None and place_in_bin(new_bin_id, piece):
+            # Ortak kural: parçayı ALABİLEN ilk aracı aç (alamayan atlanır)
+            if open_new_bin(piece) is not None:
                 placed = True
         if not placed:
             unfitted.append(piece)
