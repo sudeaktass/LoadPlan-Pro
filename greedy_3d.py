@@ -34,7 +34,7 @@ from core_3d import (
     get_all_rotations_3d, piece_used_volume as _piece_used_volume
 )
 from extreme_points_3d import create_packing_engine
-from filo_havuzu import FiloHavuzu, arac_ac
+from filo_havuzu import FiloHavuzu, arac_ac, tavan_yukselterek_dene
 from priority_utils import validate_priority, get_priority_zone
 
 
@@ -84,6 +84,7 @@ def greedy_3d_optimization(
     placements_by_bin: Dict[int, List[Placement3D]] = {}
     unfitted: List[Piece3D] = []
     placed_count = 0
+    tavan_kayitlari = []      # Lift-Top: yükseltilen araçlar
 
     # ── ORTAK ARAÇ AÇMA (filo_havuzu) — bkz. ffd_3d.py ──────────────────
     def _bin_olustur(truck: Truck3D) -> int:
@@ -172,8 +173,13 @@ def greedy_3d_optimization(
             commit(best_bid, piece, best_result)
             placed_count += 1
         else:
+            # ── Lift-Top: yeni araç açmadan ÖNCE tavanı dene ─────────
+            _lift_bid = tavan_yukselterek_dene(
+                open_bins, lambda b: _yeni_bine_koy(b, piece), tavan_kayitlari)
+            if _lift_bid is not None:
+                placed_count += 1
             # Ortak kural: parçayı ALABİLEN ilk aracı aç (alamayan atlanır)
-            if open_new_bin(piece) is not None:
+            elif open_new_bin(piece) is not None:
                 placed_count += 1
             else:
                 unfitted.append(piece)

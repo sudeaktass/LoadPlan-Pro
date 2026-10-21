@@ -120,8 +120,32 @@ class Truck3D:
     available: int
     eslesme: Optional[object] = None
 
+    # ── Ayarlanabilir tavan (Lift-Top) ──────────────────────────────────
+    # `height` AKTİF yüksekliktir ve tavan kaldırılınca BÜYÜR.
+    # `yukseklik_min` normal (indirilmiş) hâli, `yukseklik_max` kaldırılmış
+    # hâlidir. İkisi de None ise araç sabit tavanlıdır ve davranış
+    # eskisiyle birebir aynıdır.
+    yukseklik_min: Optional[int] = None
+    yukseklik_max: Optional[int] = None
+    tavan_yukseltildi: bool = False
+
     def get_volume(self) -> int:
+        """AKTİF yüksekliğe göre iç hacim.
+
+        Tavan kaldırıldıysa hacim de büyür; doluluk paydası bu yüzden
+        kendiliğinden doğru kalır (yoksa tavanı kaldırınca doluluk yapay
+        olarak düşerdi).
+        """
         return self.width * self.length * self.height
+
+    @property
+    def aktif_yukseklik(self) -> int:
+        return self.height
+
+    @property
+    def tavan_ayarlanabilir(self) -> bool:
+        return (self.yukseklik_max is not None
+                and self.yukseklik_max > (self.yukseklik_min or self.height))
 
 
 @dataclass

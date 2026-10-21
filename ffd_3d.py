@@ -38,7 +38,7 @@ from core_3d import (
     get_all_rotations_3d, piece_used_volume as _piece_used_volume
 )
 from extreme_points_3d import create_packing_engine
-from filo_havuzu import FiloHavuzu, arac_ac
+from filo_havuzu import FiloHavuzu, arac_ac, tavan_yukselterek_dene
 from priority_utils import sort_piece_list_inplace, validate_priority, get_priority_zone
 
 
@@ -196,6 +196,7 @@ def ffd_3d_optimization(
     placements_by_bin: Dict[int, List[Placement3D]] = {}
     unfitted_pieces = []
     placed_count = 0
+    tavan_kayitlari = []      # Lift-Top: yükseltilen araçlar
 
     # ── ORTAK ARAÇ AÇMA (filo_havuzu) ───────────────────────────────────
     # Eskiden buradaki kopya "küçükten büyüğe" açıyordu; artık sıra tüm
@@ -283,6 +284,14 @@ def ffd_3d_optimization(
         # Yeni bin açmadan önce: mevcut herhangi bir bin bu item'ı alabilir mi?
         # Bu kontrol FFD'nin de yaptığı şey; BFD modunda zaten yapıldı.
         # First-fit modunda, tüm binler denendi; hepsi başarısız ise yeni bin aç.
+
+        if not placed:
+            # ── Lift-Top: yeni araç açmadan ÖNCE tavanı dene ─────────
+            _lift_bid = tavan_yukselterek_dene(
+                open_bins, lambda b: place_in_bin(b, piece), tavan_kayitlari)
+            if _lift_bid is not None:
+                placed = True
+                placed_count += 1
 
         if not placed:
             # Ortak kural: parçayı ALABİLEN ilk aracı aç. Alamayan aday

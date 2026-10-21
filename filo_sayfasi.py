@@ -172,6 +172,8 @@ def _dorse_listesi(dorseler: List[Dorse]) -> None:
             "Dingil": d.dingil_sayisi,
             "Dingil kontrolü": "✅" if not eksik else f"⚠️ {len(eksik)} eksik",
             "40 ft": "📦" if d.iso_40ft_konteyner else "",
+            "Tavan": (f"⬆️ +{d.tavan_payi_mm:.0f} mm"
+                      if d.tavan_payi_mm else "sabit"),
             "Kaynak": d.kaynak or "—",
         })
     st.dataframe(pd.DataFrame(satirlar), hide_index=True, width="stretch")
@@ -356,6 +358,24 @@ def _dorse_formu(mevcut: Optional[Dorse]):
                                value=float(v.bos_dingil_grubu_payi_kg or 0),
                                key="dr_bosgrup")
 
+    st.markdown("##### Ayarlanabilir tavan (Lift-Top)")
+    st.caption("Mega dorselerde kaldırılabilir tavan. Algoritma ikinci bir "
+               "araç açmak zorunda kalmadan önce tavanı kaldırmayı dener.")
+    tv1, tv2, tv3 = st.columns(3)
+    ayarlanabilir = tv1.checkbox(
+        "Tavan yükseltilebilir", value=bool(v.ayarlanabilir_tavan),
+        key="dr_ayarlanabilir")
+    yuk_max = tv2.number_input(
+        "Azami iç yükseklik (mm)", min_value=0.0, step=10.0,
+        value=float(v.yukseklik_max_mm or 0), key="dr_yukmax",
+        help="Tavan kaldırıldığındaki iç yükseklik. İç yükseklikten "
+             "büyük olmalı.")
+    dis_yuk = tv3.number_input(
+        "Dış yükseklik (mm)", min_value=0.0, step=10.0,
+        value=float(v.dis_yukseklik_mm or 0), key="dr_disyuk",
+        help="KTY md.128 sınırı 4.000 mm. Girilirse tavan yükseltme bu "
+             "sınırı aşacaksa reddedilir. Boşsa kontrol yapılamaz.")
+
     st.markdown("##### İsteğe bağlı")
     i1, i2 = st.columns(2)
     teknik = i1.number_input("Teknik azami ağırlık (kg)", min_value=0.0,
@@ -385,6 +405,9 @@ def _dorse_formu(mevcut: Optional[Dorse]):
         bos_kingpin_payi_kg=_sayi_veya_none(bos_kp),
         bos_dingil_grubu_payi_kg=_sayi_veya_none(bos_grup),
         bos_payi_kaynagi="elle" if (bos_kp and bos_grup) else "",
+        ayarlanabilir_tavan=bool(ayarlanabilir),
+        yukseklik_max_mm=_sayi_veya_none(yuk_max),
+        dis_yukseklik_mm=_sayi_veya_none(dis_yuk),
         teknik_azami_kg=_sayi_veya_none(teknik),
         iso_40ft_konteyner=bool(konteyner),
         varsayim_alanlari=dict(v.varsayim_alanlari),

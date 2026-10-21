@@ -51,6 +51,12 @@ import yaml  # noqa: E402
 from core_3d import Piece3D, Truck3D  # noqa: E402
 import metrikler  # noqa: E402
 
+# Lift-Top (ayarlanabilir tavan) DENEYDE KAPALI: araç boyutunun koşu
+# içinde değişmesi sabit kutulara yerleştirme problemini değiştirir ve
+# aynı koşudaki doluluk karşılaştırmasını bozar. Uygulamada açıktır.
+import filo_havuzu as _fh  # noqa: E402
+_fh.LIFT_TOP_ACIK = False
+
 VARSAYILAN_CONFIG = os.path.join(_DENEY, "configs", "pilot_geometri.yaml")
 
 

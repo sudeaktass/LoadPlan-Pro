@@ -28,7 +28,8 @@ kaldırıldı.
 
 from __future__ import annotations
 
-from typing import Callable, Dict, Iterator, List, Optional, Sequence
+from typing import (Callable, Dict, Iterator, List, Optional,
+                    Sequence, Tuple)
 
 from core_3d import Piece3D, Truck3D
 
@@ -134,6 +135,100 @@ class FiloHavuzu:
 # ─────────────────────────────────────────────────────────────────────────────
 # Ortak "gerektikçe araç aç" akışı
 # ─────────────────────────────────────────────────────────────────────────────
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lift-Top — ayarlanabilir tavan inisiyatifi
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Deneyde KAPALI, uygulamada AÇIK olmalıdır: araç boyutunun koşu içinde
+# değişmesi, sabit kutulara yerleştirme problemini değiştirir ve aynı
+# koşudaki doluluk karşılaştırmasını bozar. deney/scripts bu bayrağı
+# False yaparak çalıştırır.
+LIFT_TOP_ACIK = True
+
+# KTY md.128: azami yükseklik 4,00 m (dış ölçü).
+AZAMI_DIS_YUKSEKLIK_MM = 4_000.0
+
+
+def tavan_yukseltilebilir_mi(truck: Truck3D) -> Tuple[bool, str]:
+    """Bu aracın tavanı kaldırılabilir mi?
+
+    Returns:
+        (uygun_mu, gerekçe)
+    """
+    if not LIFT_TOP_ACIK:
+        return False, "Lift-Top kapalı"
+    if not getattr(truck, "tavan_ayarlanabilir", False):
+        return False, "araç sabit tavanlı"
+    if getattr(truck, "tavan_yukseltildi", False):
+        return False, "tavan zaten kaldırılmış"
+
+    # Dış yükseklik sınırı — sessizce aşılmasın
+    es = getattr(truck, "eslesme", None)
+    dorse = getattr(es, "dorse", None) if es is not None else None
+    dis = getattr(dorse, "dis_yukseklik_mm", None) if dorse else None
+    if dis is not None:
+        artis = (truck.yukseklik_max - truck.height) * 10.0      # cm → mm
+        if float(dis) + artis > AZAMI_DIS_YUKSEKLIK_MM:
+            return False, (f"dış yükseklik {float(dis) + artis:.0f} mm > "
+                           f"{AZAMI_DIS_YUKSEKLIK_MM:.0f} mm (KTY md.128)")
+    return True, ""
+
+
+def tavan_yukselterek_dene(acik_binler: Dict[int, object],
+                           yerlestir: Callable[[int], bool],
+                           kayit: Optional[List[str]] = None
+                           ) -> Optional[int]:
+    """
+    YENİ ARAÇ AÇMADAN ÖNCE: açık araçların tavanını kaldırıp dene.
+
+    Sude'nin tanımladığı akış (21 Ekim 2026):
+      1. Parça açık araçlara sığmadı
+      2. Yeni araç açmadan önce tavanı `yukseklik_max`'a kadar kaldır,
+         tekrar dene
+      3. Sığdıysa aktif yükseklik güncellenir ve kayda geçer
+      4. Sığmadıysa tavan eski hâline iner, yeni araç açılır
+
+    Args:
+        acik_binler: {bin_id: {"truck": Truck3D, "packer": motor}}
+        yerlestir  : yerlestir(bin_id) -> bool
+        kayit      : yükseltme kayıtlarının yazılacağı liste
+
+    Returns:
+        Parçanın yerleştiği bin kimliği, ya da None.
+    """
+    if not LIFT_TOP_ACIK:
+        return None
+
+    for bid, veri in list(acik_binler.items()):
+        truck = veri.get("truck") if isinstance(veri, dict) else None
+        packer = veri.get("packer") if isinstance(veri, dict) else None
+        if truck is None or packer is None:
+            continue
+        uygun, _gerekce = tavan_yukseltilebilir_mi(truck)
+        if not uygun:
+            continue
+
+        eski_h = truck.height
+        yeni_h = int(truck.yukseklik_max)
+        if not packer.tavani_yukselt(yeni_h):
+            continue
+        truck.height = yeni_h
+
+        if yerlestir(bid):
+            truck.tavan_yukseltildi = True
+            if kayit is not None:
+                kayit.append(
+                    f"{truck.id}: tavan {eski_h} → {yeni_h} cm kaldırıldı, "
+                    f"yeni araç açılması önlendi")
+            return bid
+
+        # 4) Sığmadı → eski hâline döndür
+        packer.tavani_indir(eski_h)
+        truck.height = eski_h
+
+    return None
+
 
 def arac_ac(havuz: FiloHavuzu,
             piece: Optional[Piece3D],
@@ -332,13 +427,18 @@ def mm_to_cm(mm: float) -> int:
 def eslesme_to_truck3d(eslesme) -> Truck3D:
     """Bir çekici+dorse eşleşmesini motorun anladığı Truck3D'ye çevirir."""
     d = eslesme.dorse
+    _min_h = mm_to_cm(d.ic_yukseklik_mm)
+    _max_h = (mm_to_cm(d.yukseklik_max_mm)
+              if (d.ayarlanabilir_tavan and d.yukseklik_max_mm) else None)
     t = Truck3D(
         id=d.plaka,
         width=mm_to_cm(d.ic_genislik_mm),
         length=mm_to_cm(d.ic_uzunluk_mm),
-        height=mm_to_cm(d.ic_yukseklik_mm),
+        height=_min_h,                 # AKTİF yükseklik: tavan indirilmiş hâl
         capacity=float(eslesme.faydali_yuk_kg),
         available=1,
+        yukseklik_min=_min_h,
+        yukseklik_max=(_max_h if (_max_h and _max_h > _min_h) else None),
     )
     t.eslesme = eslesme
     return t

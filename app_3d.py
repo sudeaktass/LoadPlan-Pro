@@ -1706,6 +1706,17 @@ def show_kpis(plan, pieces, trucks=None):
     st.caption(f"{dk.ACIKLAMA_NOTU} Bu planda bağlayıcı ölçü: "
                f"**{_dol.baglayici or '—'}**.")
 
+    # ── Lift-Top: tavan yükseltme inisiyatifi sonuca yansısın ───────────
+    _yukseltilen = [t for t in (trucks or [])
+                    if getattr(t, "tavan_yukseltildi", False)]
+    if _yukseltilen:
+        _ad = ", ".join(f"{t.id} ({t.yukseklik_min}→{t.height} cm)"
+                        for t in _yukseltilen)
+        st.success(
+            f"⬆️ **Tavan yükseltildi — {len(_yukseltilen)} araç:** {_ad}. "
+            f"Algoritma yeni araç açmak yerine ayarlanabilir tavanı "
+            f"kullandı, böylece araç sayısı artmadı.")
+
     # ── Overflow araç uyarısı ─────────────────────────────────────────────────
     if st.session_state.get("_overflow_used"):
         st.warning(
