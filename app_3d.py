@@ -1034,6 +1034,16 @@ def build_pieces_from_load_rules(load_rules_df: "pd.DataFrame", geom_store: dict
             _prio_raw = row.get("Öncelik", None)
             p.priority = int(_prio_raw) if _prio_raw is not None and str(_prio_raw).strip() not in ("", "nan", "None") else None
 
+            # ── İstif limiti (karar S-B) ────────────────────────────────
+            # Hazır palet seçildiğinde paletin DİNAMİK yük kapasitesi bu
+            # sütuna yazılır ve Piece3D.max_stack_weight'i doldurur. Boşsa
+            # uygulamanın bugünkü varsayılanı (1000 kg) korunur — yani eski
+            # davranış değişmez.
+            from palet_kutuphanesi import istif_limiti_oku
+            _istif = istif_limiti_oku(row.get("İstif limiti (kg)", None))
+            if _istif is not None:
+                p.max_stack_weight = _istif
+
             p._real_width   = w          # Gerçek fiziksel genişlik (görsel için)
             p._real_length  = l          # Gerçek fiziksel uzunluk (görsel için)
             p._clearance_cm = clearance  # Bırakılacak boşluk (görsel için)
@@ -1491,6 +1501,121 @@ def run_nfp(pieces, trucks, resolution=2.0, margin=0.5):
     st.session_state["nfp_plot"]  = nfp_plot
     st.session_state["nfp_truck"] = (trucks[0].width, trucks[0].length) if trucks else (300,600)
     return plan
+
+
+def _palet_render():
+    """Hazır palet kütüphanesinden yük listesine satır ekleme (karar S-A).
+
+    Kütüphanedeki yükseklik (EUR: 144 mm) ve ağırlık (25 kg) BOŞ paletin
+    değerleridir. Uygulama yüklü paleti tek kutu saydığı için bunlar
+    doğrudan forma yazılmaz; kullanıcı paletin ÜSTÜNDEKİ yükü girer,
+    palet darası otomatik eklenir ve hesap ayrıntısı gösterilir.
+
+    "Özel ölçü" akışı değişmedi: aşağıdaki tabloya elle satır eklemek
+    eskisi gibi çalışıyor.
+    """
+    import palet_kutuphanesi as pk
+
+    with st.expander("🧱 Hazır palet seç — standart ölçüler", expanded=False):
+        _mod = st.radio(
+            "Giriş biçimi",
+            ["🧱 Hazır palet", "✏️ Özel ölçü (aşağıdaki tablo)"],
+            horizontal=True, key="palet_mod",
+        )
+        if _mod.startswith("✏️"):
+            st.caption("Aşağıdaki **Yük Listesi** tablosuna elle satır "
+                       "ekleyin — bu akış değişmedi.")
+            return
+
+        _paletler = pk.tum_paletler()
+        _p = st.selectbox(
+            "Palet", _paletler, format_func=lambda x: x.ad, key="palet_sec")
+
+        st.info(pk.bilgi_notu(_p))
+        if _p.eksik_alanlar:
+            st.warning(
+                "⚠️ Bu standart yalnız **taban ölçüsü** veriyor. Eksik: "
+                + ", ".join(_p.eksik_alanlar)
+                + ". Tahmini değer yazılmıyor — bu alanları siz gireceksiniz.")
+
+        _g_cm, _u_cm = pk.olculer_cm(_p)
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Taban (motordaki ölçü)", f"{_g_cm} × {_u_cm} cm",
+                  help="mm → cm aşağı yuvarlanır; palet gerçeğinden büyük "
+                       "görünmez (karar S-C).")
+        _pal_y = pk.palet_yuksekligi_cm(_p)
+        c2.metric("Palet yüksekliği",
+                  f"{_pal_y:.1f} cm" if _pal_y is not None else "—")
+        c3.metric("Palet boş ağırlığı",
+                  f"{_p.bos_agirlik_kg:.0f} kg"
+                  if _p.bos_agirlik_kg is not None else "—")
+
+        st.markdown("##### Paletin üstündeki yük")
+        y1, y2, y3 = st.columns(3)
+        _yuk_y = y1.number_input("Yük yüksekliği (cm)", min_value=0.0,
+                                 step=5.0, value=125.0, key="palet_yuk_y",
+                                 help="Paletin ÜSTÜNDEKİ yükün yüksekliği. "
+                                      "Palet yüksekliği otomatik eklenir.")
+        _yuk_kg = y2.number_input("Yük ağırlığı (kg)", min_value=0.0,
+                                  step=10.0, value=225.0, key="palet_yuk_kg",
+                                  help="Paletin ÜSTÜNDEKİ yükün ağırlığı. "
+                                       "Palet darası otomatik eklenir.")
+        _adet = y3.number_input("Adet", min_value=1, step=1, value=6,
+                                key="palet_adet")
+
+        k1, k2 = st.columns(2)
+        _pid = k1.text_input("ID", value=f"{_p.kod}-1", key="palet_id")
+        _musteri = k2.text_input("Müşteri (isteğe bağlı)", value="",
+                                 key="palet_musteri")
+
+        _toplam_y, _y_aciklama, _y_uy = pk.toplam_yukseklik_cm(_p, _yuk_y)
+        _toplam_kg, _kg_aciklama, _kg_uy = pk.toplam_agirlik_kg(_p, _yuk_kg)
+
+        st.markdown("##### Yük listesine eklenecek satır")
+        t1, t2, t3 = st.columns(3)
+        t1.metric("Toplam yükseklik", f"{_toplam_y:.1f} cm")
+        t2.metric("Toplam ağırlık", f"{_toplam_kg:.1f} kg")
+        t3.metric("İstif limiti",
+                  f"{pk.istif_limiti_kg(_p):.0f} kg"
+                  if pk.istif_limiti_kg(_p) is not None else "varsayılan")
+        st.caption(f"Yükseklik: {_y_aciklama}  ·  Ağırlık: {_kg_aciklama}")
+        for _u in _y_uy + _kg_uy:
+            st.warning(f"⚠️ {_u}")
+
+        if st.button("➕ Yük listesine ekle", type="primary",
+                     key="palet_ekle"):
+            _pid = (_pid or _p.kod).strip()
+            _mevcut = st.session_state.df_pallets
+            if _pid in set(_mevcut["ID"].astype(str)):
+                st.error(f"'{_pid}' ID'si zaten var. Farklı bir ID verin.")
+            else:
+                _yeni = pd.DataFrame([{
+                    "ID": _pid,
+                    "Şekil": "Dikdörtgen",
+                    "Genişlik (cm)": _g_cm,
+                    "Uzunluk (cm)": _u_cm,
+                    "Yükseklik (cm)": round(_toplam_y, 1),
+                    "Ağırlık (kg)": round(_toplam_kg, 1),
+                    "Adet": int(_adet),
+                    "Müşteri": _musteri,
+                    "Öncelik": None,
+                }])
+                st.session_state.df_pallets = pd.concat(
+                    [_mevcut, _yeni], ignore_index=True)
+                # İstif limiti ve kaynak izi — _sync_new_items buradan okur
+                st.session_state.setdefault("palet_store", {})[_pid] = {
+                    "palet_kodu": _p.kod,
+                    "kaynak": _p.kaynak,
+                    "dogrulama_durumu": _p.dogrulama_durumu,
+                    "istif_limiti_kg": pk.istif_limiti_kg(_p),
+                    "palet_darasi_kg": _p.bos_agirlik_kg,
+                    "palet_yuksekligi_cm": _pal_y,
+                }
+                st.success(
+                    f"✅ **{_pid}** eklendi — {_g_cm}×{_u_cm}×"
+                    f"{_toplam_y:.1f} cm, {_toplam_kg:.1f} kg, {_adet} adet. "
+                    f"Aşağıdaki Yük Listesi'nden değiştirebilirsiniz.")
+                st.rerun()
 
 
 def _show_fleet_report(plan, pieces, trucks):
@@ -2046,6 +2171,12 @@ if page == "🚀 Optimizasyon":
                 "Müşteri":     ["","",""],
                 "Öncelik":     [None,None,None],
             })
+
+        # ── HAZIR PALET KÜTÜPHANESİ ──────────────────────────────────────
+        # Kütüphanedeki yükseklik ve ağırlık BOŞ paletindir. Uygulama ise
+        # yüklü paleti tek kutu sayıyor; bu yüzden kullanıcı paletin
+        # ÜSTÜNDEKİ yükü girer, palet darası otomatik EKLENİR (karar S-A).
+        _palet_render()
 
         df_pallets = st.session_state.df_pallets
 
@@ -2672,6 +2803,10 @@ if page == "🚀 Optimizasyon":
                 "Rotasyon": True,  # Yük Listesi'nden yönetilir
                 "Min. Aralık (cm)": 0,
                 "Öncelik": int(r.get("Öncelik")) if r.get("Öncelik") is not None and str(r.get("Öncelik","")).strip() not in ("","nan","None") else None,
+                # Hazır palet seçildiyse paletin dinamik yük kapasitesi
+                # (palet_store'dan); elle girişte boş kalır.
+                "İstif limiti (kg)": st.session_state.get("palet_store", {})
+                    .get(pid, {}).get("istif_limiti_kg"),
             })
 
         _sw_seen_in_sync = set()  # Bu sync döngüsünde görülen ID'ler
@@ -2697,7 +2832,7 @@ if page == "🚀 Optimizasyon":
                 "Ağırlık(kg)": round(wgt, 2),
                 "Müşteri": str(st.session_state.get(f"swc_{sw['name']}", "")),
                 "Altına yerleştirilemez": False, "Üstüne yerleştirilemez": False, "Rotasyon": True,
-                "Min. Aralık (cm)": 0, "Öncelik": None,
+                "Min. Aralık (cm)": 0, "Öncelik": None, "İstif limiti (kg)": None,
             })
 
         for pf in st.session_state.get("custom_profiles", []):
@@ -2801,6 +2936,10 @@ if page == "🚀 Optimizasyon":
 
         prev_ids = set(st.session_state.load_rules["ID"].tolist())
 
+        # Eski oturumlarda/kayıtlarda bu sütun olmayabilir → eklenir (boş).
+        if "İstif limiti (kg)" not in st.session_state.load_rules.columns:
+            st.session_state.load_rules["İstif limiti (kg)"] = None
+
         edited = st.data_editor(
             st.session_state.load_rules,
             width="stretch",
@@ -2834,6 +2973,11 @@ if page == "🚀 Optimizasyon":
                 "Öncelik": st.column_config.NumberColumn(
                     "🚚 Öncelik", min_value=1, step=1,
                     help="Teslimat önceliği: 1 = kapıya en yakın. Boş = önceliksiz."),
+                "İstif limiti (kg)": st.column_config.NumberColumn(
+                    "🏋️ İstif limiti (kg)", min_value=0, step=50,
+                    help="Bu yükün ÜSTÜNE konabilecek azami ağırlık. Hazır "
+                         "palet seçildiğinde paletin dinamik yük kapasitesi "
+                         "yazılır (EUR: 1500 kg). Boş = varsayılan 1000 kg."),
             },
             key="load_rules_editor",
         )
