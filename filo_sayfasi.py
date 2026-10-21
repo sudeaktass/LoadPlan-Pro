@@ -20,6 +20,7 @@ from __future__ import annotations
 import dataclasses
 from typing import List, Optional
 
+import pandas as pd
 import streamlit as st
 
 import database as db_mod
@@ -129,6 +130,49 @@ def _sayi_veya_none(x):
     return None if (x is None or float(x) <= 0) else float(x)
 
 
+def _cekici_listesi(cekiciler: List[Cekici]) -> None:
+    """Kayıtlı çekicilerin özet tablosu — tek bakışta görünsün."""
+    if not cekiciler:
+        st.caption("Henüz çekici kaydı yok.")
+        return
+    satirlar = []
+    for c in cekiciler:
+        eksik = c.eksik_dingil_alanlari()
+        satirlar.append({
+            "Plaka": c.plaka,
+            "Marka / model": c.marka_model or "—",
+            "Dingil": c.dingil_sayisi,
+            "Boş ağırlık (kg)": int(c.bos_agirlik_kg or 0),
+            "GCW (kg)": int(c.teknik_gcw_kg) if c.teknik_gcw_kg else "—",
+            "e (mm)": int(c.besinci_teker_ofset_mm or 0),
+            "Dingil kontrolü": "✅" if not eksik else f"⚠️ {len(eksik)} eksik",
+            "Varsayım": "🔎" if c.varsayim_alanlari else "",
+        })
+    st.dataframe(pd.DataFrame(satirlar), hide_index=True, width="stretch")
+
+
+def _dorse_listesi(dorseler: List[Dorse]) -> None:
+    """Kayıtlı dorselerin özet tablosu."""
+    if not dorseler:
+        st.caption("Henüz dorse kaydı yok.")
+        return
+    satirlar = []
+    for d in dorseler:
+        eksik = d.eksik_dingil_alanlari()
+        satirlar.append({
+            "Plaka": d.plaka,
+            "Tip": d.tip,
+            "İç ölçü (mm)": f"{d.ic_uzunluk_mm:.0f}×{d.ic_genislik_mm:.0f}"
+                            f"×{d.ic_yukseklik_mm:.0f}",
+            "İç hacim (m³)": round(d.ic_hacim_m3, 1),
+            "Boş ağırlık (kg)": int(d.bos_agirlik_kg or 0),
+            "Dingil": d.dingil_sayisi,
+            "Dingil kontrolü": "✅" if not eksik else f"⚠️ {len(eksik)} eksik",
+            "40 ft": "📦" if d.iso_40ft_konteyner else "",
+        })
+    st.dataframe(pd.DataFrame(satirlar), hide_index=True, width="stretch")
+
+
 def _uyarilari_goster(uyarilar, varsayimlar=None):
     for u in uyarilar or []:
         if "yapılamadı" in u or "uygulanmadı" in u:
@@ -217,7 +261,10 @@ def _cekici_formu(mevcut: Optional[Cekici]):
     )
 
     eksik = yeni.eksik_dingil_alanlari()
-    if eksik:
+    if not plaka.strip():
+        # Boş formda uyarı yağdırmak yerine ne yapılacağını söyle
+        st.caption("Plakayı girince alanlar doğrulanmaya başlar.")
+    elif eksik:
         st.warning("⚠️ Dingil kontrolü **yapılamayacak** — eksik alanlar: "
                    + ", ".join(eksik))
     else:
@@ -354,7 +401,9 @@ def _dorse_formu(mevcut: Optional[Dorse]):
                    .replace(",", "."))
 
     eksik = yeni.eksik_dingil_alanlari()
-    if eksik:
+    if not plaka.strip():
+        st.caption("Plakayı girince alanlar doğrulanmaya başlar.")
+    elif eksik:
         st.warning("⚠️ Dingil kontrolü **yapılamayacak** — eksik alanlar: "
                    + ", ".join(eksik))
     _uyarilari_goster(yeni.tutarlilik_uyarilari(), yeni.varsayim_alanlari)
@@ -423,6 +472,46 @@ def render():
     cekiciler = _cekici_kayitlari()
     dorseler = _dorse_kayitlari()
 
+    # ── Tek bakışta durum ───────────────────────────────────────────────
+    if cekiciler or dorseler:
+        # Özet KAYITLI filoyu anlatır (o anki seçimi değil) — yoksa
+        # "1 çekici, 1 dorse ama 0 sefer" gibi yanıltıcı bir tablo çıkar.
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Çekici", len(cekiciler))
+        m2.metric("Dorse", len(dorseler))
+        _sefer = min(len(cekiciler), len(dorseler))
+        m3.metric("Olası sefer", _sefer,
+                  help="Her çekici en çok bir sefer yapar; sefer sayısı "
+                       "çekici ve dorse sayısının küçüğüyle sınırlıdır.")
+        if _sefer:
+            from filo_havuzu import havuz_olustur_cekici_dorse
+            _toplam = sum(t.capacity for t in
+                          havuz_olustur_cekici_dorse(cekiciler,
+                                                     dorseler).trucks)
+            m4.metric("Toplam faydalı yük",
+                      f"{_toplam:,.0f} kg".replace(",", "."))
+        else:
+            m4.metric("Toplam faydalı yük", "—",
+                      help="Hem çekici hem dorse kaydı gerekir.")
+
+        # ── Bu filo optimizasyonda kullanılıyor mu? ──────────────────────
+        if eski_tablo_mu():
+            u1, u2 = st.columns([3, 1])
+            u1.warning("Bu filo şu anda **kullanılmıyor** — optimizasyon "
+                       "kenar çubuğundaki eski araç tablosuyla çalışıyor.")
+            if u2.button("✅ Bu filoyu kullan", type="primary",
+                         width="stretch", key="ust_filoya_gec"):
+                secimi_kaydet([c.plaka for c in cekiciler],
+                              [d.plaka for d in dorseler])
+                st.rerun()
+        elif _sefer:
+            st.success("✅ Bu filo optimizasyonda **kullanılıyor**.")
+
+        if len(dorseler) > len(cekiciler):
+            st.warning(f"⚠️ {len(dorseler) - len(cekiciler)} dorse için boş "
+                       f"çekici yok → o dorseler sefer yapamaz.")
+        st.markdown("---")
+
     if not cekiciler and not dorseler:
         st.info("Filo boş. Örnek filoyu yükleyerek başlayabilirsiniz "
                 "(Ford F-MAX 4x2 + Schmitz SCS 24/L).")
@@ -438,6 +527,8 @@ def render():
 
     # ── Çekiciler ───────────────────────────────────────────────────────
     with t1:
+        _cekici_listesi(cekiciler)
+        st.markdown("---")
         secenekler = ["➕ Yeni çekici"] + [c.plaka for c in cekiciler]
         secim = st.selectbox("Kayıt", secenekler, key="ck_secim")
         mevcut = next((c for c in cekiciler if c.plaka == secim), None)
@@ -463,6 +554,8 @@ def render():
 
     # ── Dorseler ────────────────────────────────────────────────────────
     with t2:
+        _dorse_listesi(dorseler)
+        st.markdown("---")
         secenekler = ["➕ Yeni dorse"] + [d.plaka for d in dorseler]
         secim = st.selectbox("Kayıt", secenekler, key="dr_secim")
         mevcut = next((d for d in dorseler if d.plaka == secim), None)
