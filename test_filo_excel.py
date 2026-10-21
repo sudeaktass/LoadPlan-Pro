@@ -260,3 +260,56 @@ def test_gidis_donus_kaynak_alanlarini_koruyor():
 def test_bos_filo_disa_aktarilabiliyor():
     ck, dr, hatalar, _ = fx.oku(fx.disa_aktar([], []))
     assert ck == [] and dr == [] and hatalar == []
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Dolu örnek dosya (deneme amaçlı)
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_ornek_veri_dogrudan_okunabiliyor():
+    """İndirip hiç değiştirmeden yüklenebilmeli."""
+    ck, dr, hatalar, uyarilar = fx.oku(fx.ornek_veri_uret())
+    assert hatalar == []
+    assert uyarilar == []
+    assert len(ck) == 3 and len(dr) == 3
+
+
+def test_ornek_veride_plakalar_benzersiz():
+    ck, dr, _, _ = fx.oku(fx.ornek_veri_uret())
+    plakalar = [c.plaka for c in ck] + [d.plaka for d in dr]
+    assert len(plakalar) == len(set(plakalar))
+
+
+def test_ornek_veri_uydurulmus_arac_icermiyor():
+    """Yalnız doğrulanmış iki föy; aynı model farklı plakalarla tekrarlanır."""
+    ck, dr, _, _ = fx.oku(fx.ornek_veri_uret())
+    assert {c.marka_model for c in ck} == {"Ford F-MAX 4x2"}
+    assert {d.tip for d in dr} == {"tenteli"}
+    for k in list(ck) + list(dr):
+        assert k.kaynak, "kaynak alanı boş olmamalı"
+        assert k.dogrulama_durumu, "doğrulama durumu boş olmamalı"
+
+
+def test_ornek_veri_dingil_kontrolu_calisiyor():
+    ck, dr, _, _ = fx.oku(fx.ornek_veri_uret())
+    es = eslesme_hesapla(ck[0], dr[0])
+    assert es.dingil_kontrol_edilebilir
+    assert es.faydali_yuk_kg == pytest.approx(25_757.0)
+
+
+def test_ornek_veri_uc_sefer_veriyor():
+    from filo_havuzu import havuz_olustur_cekici_dorse
+    ck, dr, _, _ = fx.oku(fx.ornek_veri_uret())
+    h = havuz_olustur_cekici_dorse(ck, dr)
+    assert h.tavan() == 3
+    assert sum(t.capacity for t in h.trucks) == pytest.approx(77_271.0)
+
+
+def test_bos_sablon_ile_ornek_ayni_sutunlari_kullaniyor():
+    import pandas as pd
+    bos = _kitap(fx.sablon_uret())
+    dolu = _kitap(fx.ornek_veri_uret())
+    assert list(bos[fx.SAYFA_CEKICI].columns) == \
+        list(dolu[fx.SAYFA_CEKICI].columns)
+    assert list(bos[fx.SAYFA_DORSE].columns) == \
+        list(dolu[fx.SAYFA_DORSE].columns)

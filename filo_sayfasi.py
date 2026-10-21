@@ -445,6 +445,19 @@ def _excel_sekmesi(cekiciler: List[Cekici], dorseler: List[Dorse]) -> None:
         except Exception as e:                               # noqa: BLE001
             st.error(f"Şablon üretilemedi: {e}")
 
+        st.markdown("**Denemek için: dolu örnek**")
+        st.caption("3 çekici + 3 dorse doldurulmuş. İndirip hiç "
+                   "değiştirmeden yükleyebilirsiniz.")
+        try:
+            st.download_button(
+                "⬇️ Örnek veriyi indir (dolu)", data=fx.ornek_veri_uret(),
+                file_name="loadplan_filo_ornek.xlsx",
+                mime=("application/vnd.openxmlformats-officedocument"
+                      ".spreadsheetml.sheet"),
+                width="stretch", key="filo_ornek_indir")
+        except Exception as e:                               # noqa: BLE001
+            st.error(f"Örnek üretilemedi: {e}")
+
         if cekiciler or dorseler:
             st.markdown("**Mevcut filoyu dışa aktar**")
             st.caption("Aynı biçimde; düzenleyip geri yükleyebilirsiniz.")

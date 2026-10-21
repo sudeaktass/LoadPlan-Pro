@@ -249,6 +249,42 @@ def sablon_uret(ornek_dahil: bool = True) -> bytes:
     return tampon.getvalue()
 
 
+def ornek_veri_uret() -> bytes:
+    """
+    DOLDURULMUŞ örnek dosya — doğrudan içe aktarılabilir.
+
+    Boş şablondan farkı: "Çekiciler" ve "Dorseler" sayfaları dolu, yani
+    indirip hiç değiştirmeden yükleyebilirsiniz. Deneme amaçlıdır.
+
+    İÇİNDE UYDURULMUŞ ARAÇ YOKTUR: yalnız doğrulanmış iki föy kullanılır
+    (Ford F-MAX 4x2 ve Schmitz SCS 24/L), gerçek bir filoda olduğu gibi
+    aynı modelden birden fazla araç farklı plakalarla tekrarlanır.
+    """
+    from ornek_filo import FOY_FORD, FOY_SCHMITZ, ford_fmax_4x2, schmitz_scs_24l
+
+    not_metni = "değerler föyden okundu; föy PDF'i arşivde yok"
+
+    cekiciler = []
+    for i in range(1, 4):
+        c = ford_fmax_4x2()
+        c.cekici_id = f"C-{i:03d}"
+        c.plaka = f"34 AAA {i:03d}"
+        c.kaynak = FOY_FORD
+        c.dogrulama_durumu = not_metni
+        cekiciler.append(c)
+
+    dorseler = []
+    for i in range(1, 4):
+        d = schmitz_scs_24l()
+        d.dorse_id = f"D-{i:03d}"
+        d.plaka = f"34 DDD {i:03d}"
+        d.kaynak = FOY_SCHMITZ
+        d.dogrulama_durumu = not_metni
+        dorseler.append(d)
+
+    return disa_aktar(cekiciler, dorseler)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Okuma
 # ─────────────────────────────────────────────────────────────────────────────
