@@ -147,6 +147,9 @@ def _cekici_listesi(cekiciler: List[Cekici]) -> None:
             "e (mm)": int(c.besinci_teker_ofset_mm or 0),
             "Dingil kontrolü": "✅" if not eksik else f"⚠️ {len(eksik)} eksik",
             "Varsayım": "🔎" if c.varsayim_alanlari else "",
+            # Kaynak her zaman görünsün: bir kaydın gerçek föyden mi yoksa
+            # deneme amaçlı kurgudan mı geldiği gözden kaçmasın.
+            "Kaynak": c.kaynak or "—",
         })
     st.dataframe(pd.DataFrame(satirlar), hide_index=True, width="stretch")
 
@@ -169,6 +172,7 @@ def _dorse_listesi(dorseler: List[Dorse]) -> None:
             "Dingil": d.dingil_sayisi,
             "Dingil kontrolü": "✅" if not eksik else f"⚠️ {len(eksik)} eksik",
             "40 ft": "📦" if d.iso_40ft_konteyner else "",
+            "Kaynak": d.kaynak or "—",
         })
     st.dataframe(pd.DataFrame(satirlar), hide_index=True, width="stretch")
 
