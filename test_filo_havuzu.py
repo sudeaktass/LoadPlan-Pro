@@ -379,3 +379,79 @@ def test_havuz_cekicisiz_filo_bos():
     havuz = havuz_olustur_cekici_dorse([], [schmitz_scs_24l()])
     assert havuz.tavan() == 0
     assert havuz.ac() is None
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Eşleştirme dökümü — "bunlar neye göre eşleşti?" (21 Ekim 2026)
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _cekici(plaka, bos_agirlik=7_908.0, e=600.0):
+    c = ford_fmax_4x2()
+    c.cekici_id = c.plaka = plaka
+    c.bos_agirlik_kg = bos_agirlik
+    c.besinci_teker_ofset_mm = e
+    return c
+
+
+def _dorse(plaka, uzunluk=13_620.0):
+    d = schmitz_scs_24l()
+    d.dorse_id = d.plaka = plaka
+    d.ic_uzunluk_mm = uzunluk
+    return d
+
+
+def test_dokum_havuzla_ayni_eslestirmeyi_veriyor():
+    from filo_havuzu import eslestirme_dokumu
+    ck = [_cekici("34 A"), _cekici("34 B")]
+    dr = [_dorse("34 X"), _dorse("34 Y")]
+    dokum = eslestirme_dokumu(ck, dr)
+    havuz = havuz_olustur_cekici_dorse(ck, dr)
+    assert [(s["cekici"].plaka, s["dorse"].plaka) for s in dokum] == \
+        [(t.eslesme.cekici.plaka, t.eslesme.dorse.plaka)
+         for t in havuz.trucks]
+
+
+def test_dokum_esit_adaylarda_liste_sirasi_diyor():
+    """Hepsi aynıysa karar üçüncü ölçüte (liste sırası) kalır."""
+    from filo_havuzu import eslestirme_dokumu
+    dokum = eslestirme_dokumu([_cekici("34 A"), _cekici("34 B")],
+                              [_dorse("34 X"), _dorse("34 Y")])
+    assert all("liste sırası" in s["neden"] for s in dokum)
+    assert [s["cekici"].plaka for s in dokum] == ["34 A", "34 B"]
+
+
+def test_dokum_faydali_yuk_farkliysa_onu_soyluyor():
+    from filo_havuzu import eslestirme_dokumu
+    hafif = _cekici("34 HAFIF", bos_agirlik=7_000.0)
+    agir = _cekici("34 AGIR", bos_agirlik=8_500.0)
+    dokum = eslestirme_dokumu([agir, hafif], [_dorse("34 X")])
+    assert dokum[0]["cekici"] is hafif
+    assert dokum[0]["neden"] == "en yüksek faydalı yük"
+
+
+def test_dokum_dingil_payi_esitlik_bozucusunu_soyluyor():
+    from filo_havuzu import eslestirme_dokumu
+    dar = _cekici("34 DAR", e=900.0)        # kingpin kapasitesi 7.560
+    genis = _cekici("34 GENIS", e=600.0)    # kingpin kapasitesi 11.042
+    dokum = eslestirme_dokumu([dar, genis], [_dorse("34 X")])
+    assert dokum[0]["cekici"] is genis
+    assert "dingil payı" in dokum[0]["neden"]
+
+
+def test_dokum_cekici_yetmezse_soyluyor():
+    from filo_havuzu import eslestirme_dokumu
+    dokum = eslestirme_dokumu([_cekici("34 A")],
+                              [_dorse("34 X"), _dorse("34 Y")])
+    assert dokum[0]["cekici"] is not None
+    assert dokum[1]["cekici"] is None
+    assert "sefer yapamaz" in dokum[1]["neden"]
+
+
+def test_dokum_dorseleri_hacme_gore_siraliyor():
+    """Açma sırası: büyükten küçüğe."""
+    from filo_havuzu import eslestirme_dokumu
+    kucuk = _dorse("34 KUCUK", uzunluk=7_000.0)
+    buyuk = _dorse("34 BUYUK", uzunluk=13_620.0)
+    dokum = eslestirme_dokumu([_cekici("34 A"), _cekici("34 B")],
+                              [kucuk, buyuk])
+    assert [s["dorse"].plaka for s in dokum] == ["34 BUYUK", "34 KUCUK"]

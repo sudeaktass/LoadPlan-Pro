@@ -254,7 +254,12 @@ def ornek_veri_uret() -> bytes:
     DOLDURULMUŞ örnek dosya — doğrudan içe aktarılabilir.
 
     Boş şablondan farkı: "Çekiciler" ve "Dorseler" sayfaları dolu, yani
-    indirip hiç değiştirmeden yükleyebilirsiniz. Deneme amaçlıdır.
+    indirip hiç değiştirmeden yüklenebilir. Deneme amaçlıdır.
+
+    ARAYÜZDE GÖSTERİLMEZ (Sude, 21 Ekim 2026: "örnek dosyayı bana versen
+    yeterdi, uygulamaya eklemene gerek yoktu"). Dosya elle üretilip
+    paylaşılır; burada kalmasının nedeni testlerin ve üretimin tek
+    kaynaktan beslenmesi.
 
     İÇİNDE UYDURULMUŞ ARAÇ YOKTUR: yalnız doğrulanmış iki föy kullanılır
     (Ford F-MAX 4x2 ve Schmitz SCS 24/L), gerçek bir filoda olduğu gibi

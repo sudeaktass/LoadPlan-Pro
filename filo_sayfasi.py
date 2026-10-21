@@ -445,19 +445,6 @@ def _excel_sekmesi(cekiciler: List[Cekici], dorseler: List[Dorse]) -> None:
         except Exception as e:                               # noqa: BLE001
             st.error(f"Şablon üretilemedi: {e}")
 
-        st.markdown("**Denemek için: dolu örnek**")
-        st.caption("3 çekici + 3 dorse doldurulmuş. İndirip hiç "
-                   "değiştirmeden yükleyebilirsiniz.")
-        try:
-            st.download_button(
-                "⬇️ Örnek veriyi indir (dolu)", data=fx.ornek_veri_uret(),
-                file_name="loadplan_filo_ornek.xlsx",
-                mime=("application/vnd.openxmlformats-officedocument"
-                      ".spreadsheetml.sheet"),
-                width="stretch", key="filo_ornek_indir")
-        except Exception as e:                               # noqa: BLE001
-            st.error(f"Örnek üretilemedi: {e}")
-
         if cekiciler or dorseler:
             st.markdown("**Mevcut filoyu dışa aktar**")
             st.caption("Aynı biçimde; düzenleyip geri yükleyebilirsiniz.")
@@ -505,15 +492,36 @@ def _excel_sekmesi(cekiciler: List[Cekici], dorseler: List[Dorse]) -> None:
         st.caption(f"🚍 {len(yeni_dr)} dorse")
         _dorse_listesi(yeni_dr)
 
-    # Mevcut kayıtlarla çakışma
+    # ── Mevcut verilerle ne yapılsın? (yük yükleme akışındaki gibi) ─────
     mevcut = {c.plaka for c in cekiciler} | {d.plaka for d in dorseler}
     cakisan = sorted(
         {k.plaka for k in list(yeni_ck) + list(yeni_dr)} & mevcut)
-    if cakisan:
+
+    st.markdown("##### Mevcut filoyla ne yapılsın?")
+    kip = st.radio(
+        "Mevcut filoyla ne yapılsın?",
+        ["➕ Mevcut filoya ekle",
+         "🔄 Üzerine yaz (mevcut filoyu temizle)"],
+        horizontal=True, key="filo_excel_kip", label_visibility="collapsed")
+    uzerine_yaz = kip.startswith("🔄")
+
+    if uzerine_yaz:
+        st.warning(
+            f"⚠️ Kayıtlı **{len(cekiciler)} çekici ve {len(dorseler)} "
+            f"dorse pasife alınacak**, yerine dosyadaki "
+            f"{len(yeni_ck) + len(yeni_dr)} kayıt gelecek. Kayıtlar "
+            f"silinmez, pasife alınır — eski planların hangi araçla "
+            f"yapıldığı korunur.")
+    elif cakisan:
         st.warning("⚠️ Bu plakalar zaten kayıtlı, **üzerine yazılacak**: "
                    + ", ".join(cakisan))
 
-    if st.button("✅ Filoya ekle", type="primary", key="filo_excel_uygula"):
+    if st.button("✅ Uygula", type="primary", key="filo_excel_uygula"):
+        if uzerine_yaz:
+            for c in cekiciler:
+                _pasife_al("cekici", c.plaka)
+            for d in dorseler:
+                _pasife_al("dorse", d.plaka)
         eklenen, basarisiz = 0, []
         for kayit in yeni_ck:
             hata = _cekici_kaydet(kayit)
@@ -534,10 +542,54 @@ def _excel_sekmesi(cekiciler: List[Cekici], dorseler: List[Dorse]) -> None:
             st.rerun()
 
 
+def _otomatik_eslestirme(cekiciler: List[Cekici], dorseler: List[Dorse]):
+    """Sistemin yapacağı eşleştirme + neden böyle olduğu.
+
+    Eşleştirme ELLE YAPILMAZ ve Excel'de de bir sütunu yoktur: çekici ve
+    dorse kayıtları girilir, eşleştirmeyi sistem kurala göre yapar
+    (karar C). Bu tablo o kararı görünür kılar.
+    """
+    from filo_havuzu import ACMA_SIRASI, eslestirme_dokumu
+
+    st.subheader("🔗 Sistemin yaptığı eşleştirme")
+    st.caption(
+        "Eşleştirmeyi **sistem** yapar; elle ya da Excel'den "
+        "belirlenmez. Kural (karar C): **1)** en yüksek faydalı yük → "
+        "**2)** eşitse en geniş dingil payı → **3)** hâlâ eşitse liste "
+        "sırası (plakaya göre). Dorseler hacme göre "
+        f"{'büyükten küçüğe' if ACMA_SIRASI == 'buyukten_kucuge' else 'küçükten büyüğe'} "
+        "sıraya dizilir.")
+
+    dokum = eslestirme_dokumu(cekiciler, dorseler)
+    satirlar = []
+    for s in dokum:
+        satirlar.append({
+            "Çekici": s["cekici"].plaka if s["cekici"] else "— yok —",
+            "Dorse": s["dorse"].plaka,
+            "Hacim (m³)": round(s["dorse"].ic_hacim_m3, 1),
+            "Faydalı yük (kg)": (int(s["faydali_yuk_kg"])
+                                 if s["faydali_yuk_kg"] else "—"),
+            "Neden bu çekici?": s["neden"],
+        })
+    st.dataframe(pd.DataFrame(satirlar), hide_index=True, width="stretch")
+
+    if all("liste sırası" in s["neden"] for s in dokum if s["cekici"]):
+        st.info("ℹ️ Bu filodaki çekicilerin hepsi birbirinin aynı (aynı "
+                "faydalı yük, aynı dingil payı), dorseler de aynı. Bu "
+                "yüzden kuralın ilk iki ölçütü eşit çıkıyor ve eşleştirme "
+                "**plaka sırasına** göre yapılıyor. Farklı modeller "
+                "girerseniz ilk ölçüt devreye girer.")
+    st.markdown("---")
+
+
 def _eslesme_onizleme(cekiciler: List[Cekici], dorseler: List[Dorse]):
-    st.subheader("🔗 Eşleşme önizlemesi")
+    _otomatik_eslestirme(cekiciler, dorseler)
+
+    st.subheader("🔍 Tek tek incele")
+    st.caption("Aşağıdaki seçim YALNIZCA inceleme içindir; eşleştirmeyi "
+               "değiştirmez.")
     if not cekiciler or not dorseler:
-        st.info("Önizleme için en az bir çekici ve bir dorse kaydı gerekli.")
+        st.info("İnceleme için en az bir çekici ve bir dorse kaydı gerekli.")
         return
 
     c1, c2 = st.columns(2)

@@ -344,6 +344,59 @@ def eslesme_to_truck3d(eslesme) -> Truck3D:
     return t
 
 
+def eslestirme_dokumu(cekiciler: Sequence, dorseler: Sequence,
+                      sira: str = ACMA_SIRASI) -> List[Dict[str, object]]:
+    """
+    Sistemin yapacağı çekici-dorse eşleştirmesini GEREKÇESİYLE döndürür.
+
+    `havuz_olustur_cekici_dorse` ile AYNI sırayı ve aynı kuralı kullanır;
+    farkı, her satır için "neden bu çekici seçildi" bilgisini de vermesi.
+    Arayüzde kullanıcı "bunlar neye göre eşleşti?" diye sorduğunda
+    cevabı göstermek için.
+
+    Returns:
+        [{dorse, cekici, faydali_yuk_kg, neden}, ...]
+    """
+    from filo_modeli import cekici_ata, eslesme_hesapla
+
+    ters = (sira == "buyukten_kucuge")
+    dorse_sirali = sorted(dorseler, key=lambda d: d.ic_hacim_mm3,
+                          reverse=ters)
+    bos = list(cekiciler)
+    dokum: List[Dict[str, object]] = []
+
+    for dorse in dorse_sirali:
+        if not bos:
+            dokum.append({"dorse": dorse, "cekici": None,
+                          "faydali_yuk_kg": None,
+                          "neden": "boş çekici kalmadı → sefer yapamaz"})
+            continue
+
+        # Adayların ölçütleri — gerekçeyi buradan çıkarıyoruz
+        yukler = [eslesme_hesapla(c, dorse).faydali_yuk_kg for c in bos]
+        paylar = [c.kingpin_kapasitesi_kg() for c in bos]
+        cekici, es = cekici_ata(dorse, bos)
+        if cekici is None or es is None:
+            dokum.append({"dorse": dorse, "cekici": None,
+                          "faydali_yuk_kg": None,
+                          "neden": "uygun çekici bulunamadı"})
+            continue
+
+        if len(set(yukler)) > 1:
+            neden = "en yüksek faydalı yük"
+        elif len({p for p in paylar if p is not None}) > 1:
+            neden = "faydalı yük eşit → en geniş dingil payı"
+        else:
+            neden = ("faydalı yük ve dingil payı eşit → liste sırası "
+                     "(plakaya göre)")
+
+        bos.remove(cekici)
+        dokum.append({"dorse": dorse, "cekici": cekici,
+                      "faydali_yuk_kg": es.faydali_yuk_kg, "neden": neden})
+
+    return dokum
+
+
 def havuz_olustur_cekici_dorse(cekiciler: Sequence,
                                dorseler: Sequence,
                                sira: str = ACMA_SIRASI) -> FiloHavuzu:
