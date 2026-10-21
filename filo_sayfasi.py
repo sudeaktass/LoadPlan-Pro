@@ -667,8 +667,12 @@ def render():
         # ── Bu filo optimizasyonda kullanılıyor mu? ──────────────────────
         if eski_tablo_mu():
             u1, u2 = st.columns([3, 1])
-            u1.warning("Bu filo şu anda **kullanılmıyor** — optimizasyon "
-                       "kenar çubuğundaki eski araç tablosuyla çalışıyor.")
+            u1.warning(
+                "Bu filo şu anda **kullanılmıyor**. Optimizasyon, kenar "
+                "çubuğundaki **basit araç tablosuyla** çalışıyor — çekici "
+                "ve dorse ayrımı olmayan, kapasitesi elle girilen eski "
+                "giriş biçimi. O tabloda mevzuat kapasitesi hesaplanmaz ve "
+                "dingil kontrolü yapılamaz."),
             if u2.button("✅ Bu filoyu kullan", type="primary",
                          width="stretch", key="ust_filoya_gec"):
                 secimi_kaydet([c.plaka for c in cekiciler],
@@ -781,13 +785,17 @@ def render():
                     f"(Seçim kalıcıdır, sayfa yenilense de korunur.)")
 
         if eski_tablo_mu():
-            st.warning("Şu anda **eski araç tablosu** kullanılıyor. "
-                       "Yukarıdaki düğmeyle bu filoya geçebilirsiniz.")
+            st.warning("Şu anda **basit araç tablosu** kullanılıyor "
+                       "(kenar çubuğu). Yukarıdaki düğmeyle bu filoya "
+                       "geçebilirsiniz.")
         else:
             _ck_a, _dr_a = aktif_filo()
             if _ck_a and _dr_a:
                 st.caption(f"Şu anda kullanılan filo: **{len(_ck_a)} çekici, "
                            f"{len(_dr_a)} dorse**.")
-                if st.button("↩️ Eski araç tablosuna dön"):
+                if st.button("↩️ Basit araç tablosuna dön",
+                             help="Kenar çubuğundaki, çekici/dorse ayrımı "
+                                  "olmayan eski giriş biçimi. Mevzuat "
+                                  "kapasitesi ve dingil kontrolü çalışmaz."):
                     eski_tablo_ayarla(True)
                     st.rerun()

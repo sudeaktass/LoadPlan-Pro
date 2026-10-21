@@ -435,7 +435,7 @@ def get_allowed_pages(role: str) -> list:
         operator → Dashboard, Optimizasyon, Projelerim
     """
     # Filo önce: önce araçlar tanımlanır, sonra optimizasyon çalıştırılır.
-    base = ["🚚 Filo", "🚀 Optimizasyon", "📁 Projelerim"]
+    base = ["🚚 Filo", "📦 Malzeme Yükleme", "🚀 Optimizasyon", "📁 Projelerim"]
     if role in ("admin", "manager"):
         base.append("⚙️ Şirket Ayarları")
     return base

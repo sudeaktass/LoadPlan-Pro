@@ -335,8 +335,11 @@ div[data-testid="stSidebarNav"] {display:none}
                 st.warning(f"⚠️ {len(_sb_dr) - len(_sb_ck)} dorse için boş "
                            f"çekici yok → o dorseler açılamaz.")
 
-            if st.button("↩️ Eski araç tablosuna dön", width="stretch",
-                         key="sb_filo_birak"):
+            if st.button("↩️ Basit araç tablosuna geç", width="stretch",
+                         key="sb_filo_birak",
+                         help="Çekici/dorse ayrımı olmayan eski giriş "
+                              "biçimi: kapasiteyi elle yazarsınız, mevzuat "
+                              "hesabı ve dingil kontrolü çalışmaz."):
                 eski_tablo_ayarla(True)
                 st.rerun()
 
@@ -399,8 +402,12 @@ div[data-testid="stSidebarNav"] {display:none}
         sel_algo  = None
         sel_algos = []
 
+        # KARAR A (21 Ekim 2026): Multi-Start SA, Island GA ve BO-HPO
+        # DONDURULDU ve 21 Ekim'de arayüzden TAMAMEN KALDIRILDI.
+        # Kodları multistart_sa_3d.py, island_genetic_3d.py ve
+        # bayesian_optimizer_3d.py dosyalarında duruyor; mantıklarına
+        # dokunulmadı. Varyant analizi gerekirse doğrudan çağrılabilirler.
         _std_keys = [k for k,v in ALGORITHMS.items() if not v["advanced"]]
-        _adv_keys = [k for k,v in ALGORITHMS.items() if v["advanced"]]
 
         if mode == "🎯 Tek":
             st.caption("**Standart**")
@@ -419,38 +426,6 @@ div[data-testid="stSidebarNav"] {display:none}
             sel_algo = keys[idx]
             st.caption(f"⏱️ {ALGORITHMS[sel_algo]['time']}")
 
-            st.markdown("---")
-            # KARAR A (21 Ekim 2026): Multi-Start SA, Island GA ve BO-HPO
-            # DONDURULDU — ana karşılaştırmadan ve deneyden çıktılar.
-            # Kodları duruyor, mantıklarına dokunulmadı; varyant analizi
-            # için buradan çalıştırılabilirler.
-            st.caption("**📦 Arşiv / varyantlar** — dondurulmuş, "
-                       "ana karşılaştırmaya girmez")
-            _adv_labels = []
-            for k in _adv_keys:
-                _disabled = (k == "bayesian" and not HAS_BAYESIAN) or \
-                            (k == "island_ga" and not HAS_ISLAND_GA) or \
-                            (k == "multistart_sa" and not HAS_MULTISTART)
-                _lbl = ALGORITHMS[k]["name"] + (" ⏱️ " + ALGORITHMS[k]["time"])
-                if not _disabled:
-                    _adv_labels.append((k, _lbl))
-
-            if _adv_labels:
-                _adv_choice = st.radio(
-                    "adv", ["(Seçme)"] + [l for _, l in _adv_labels],
-                    label_visibility="collapsed"
-                )
-                for k, l in _adv_labels:
-                    if _adv_choice == l:
-                        sel_algo = k
-                        st.caption(f"⏱️ {ALGORITHMS[k]['time']}")
-                        break
-            else:
-                st.info("İleri düzey dosyalar klasörde bulunamadı.")
-            # Yüklenemeyen modüllerin SEBEBİNİ göster (sessiz maskelenmesin)
-            for _mk, _merr in _ADV_IMPORT_ERRORS.items():
-                if _mk in ("bayesian", "island_ga", "multistart_sa"):
-                    st.caption(f"⚠️ `{_mk}` yüklenemedi: {_merr[:120]}")
 
         else:
             _c1, _c2 = st.columns(2)
@@ -472,20 +447,6 @@ div[data-testid="stSidebarNav"] {display:none}
                 if st.checkbox(v["name"], key=f"cmp_{k}"):
                     sel_algos.append(k)
 
-            st.markdown("---")
-            st.caption("**🔬 İleri Düzey**")
-            for k in _adv_keys:
-                v = ALGORITHMS[k]
-                _disabled = (k == "bayesian" and not HAS_BAYESIAN) or \
-                            (k == "island_ga" and not HAS_ISLAND_GA) or \
-                            (k == "multistart_sa" and not HAS_MULTISTART)
-                if not _disabled:
-                    if f"cmp_{k}" not in st.session_state:
-                        st.session_state[f"cmp_{k}"] = False
-                    if st.checkbox(v["name"], key=f"cmp_{k}"):
-                        sel_algos.append(k)
-                else:
-                    st.caption(f"~~{v['name']}~~ (dosya bulunamadı)")
 
         st.markdown("---")
         st.header("⚙️ Parametreler")
@@ -531,25 +492,9 @@ div[data-testid="stSidebarNav"] {display:none}
         isl_time=120; isl_workers=0
         ms_starts=5; ms_time=90
 
-        st.markdown("**🔬 İleri Düzey Parametreler**")
-        with st.expander("🔬 Bayesian Optimizasyon", expanded="bayesian" in active):
-            bay_time   = st.slider("Bütçe (sn)", 30, 300, 120, 15, key="bay_t")
-            bay_trials = st.slider("Maks. Deneme", 10, 100, 40, 5)
-            bay_target = st.selectbox("Optimize Edilen", ["auto","Genetic","SA","Tabu","MonteCarlo"])
-        with st.expander("🏝️ Island GA", expanded="island_ga" in active):
-            isl_islands = st.slider("Ada Sayısı", 2, 8, 4, 1)
-            isl_pop     = st.slider("Ada Popülasyonu", 10, 60, 25, 5)
-            isl_gen     = st.slider("Nesil", 30, 200, 80, 10)
-            isl_mig     = st.slider("Göç Aralığı", 5, 30, 15, 5)
-            isl_time    = st.slider("Maks. Süre (sn, 0=sınırsız)", 0, 600, 120, 30,
-                help="Süre dolunca en iyi bulunan çözümle erken biter.")
-            isl_workers = st.slider("Paralel işçi (0=kapalı)", 0, 8, 0, 1,
-                key="isl_wrk",
-                help="Tüm adaların birey değerlendirmelerini çok çekirdekte "
-                     "paralel koşar; sonuç sıralı koşuyla birebir aynıdır.")
-        with st.expander("🔁 Multi-Start SA", expanded="multistart_sa" in active):
-            ms_starts = st.slider("Başlangıç Noktası", 2, 10, 5, 1)
-            ms_time   = st.slider("Toplam Süre (sn)", 30, 300, 90, 15, key="ms_t")
+        # Dondurulmuş varyantların (Bayesian / Island GA / Multi-Start SA)
+        # parametre ayarları arayüzden kaldırıldı (karar A). Varsayılanlar
+        # yukarıda duruyor; kod doğrudan çağrılırsa yine çalışır.
 
         st.markdown("---")
         st.header("🚛 Akıllı Araç Seçimi")
@@ -2059,7 +2004,7 @@ def plan_rank(plan) -> tuple:
 # ─────────────────────────────────────────────────────────────────────────────
 # SAYFA: OPTİMİZASYON
 # ─────────────────────────────────────────────────────────────────────────────
-if page == "🚀 Optimizasyon":
+if page in ("🚀 Optimizasyon", "📦 Malzeme Yükleme"):
     # ── Algoritma hover tooltip motoru ───────────────────────────────────────
     # components.html() SIDEBAR DIŞINDA çağrılmalı — içinde iframe render edilmez.
     # height=0 → görünmez; JS window.parent.document ile sidebar'a erişir.
@@ -2156,905 +2101,938 @@ if page == "🚀 Optimizasyon":
         height=0, scrolling=False,
     )
 
-    st.title("🧊 3D Araç Yükleme Optimizasyonu")
-    st.caption("EP · Layer Building · Tabu/SA · NFP Nested Packing · STEP/STL import")
+    # ── Sayfaya göre başlık ──────────────────────────────────────────────
+    # 📦 Malzeme Yükleme : yalnız yük tanımı
+    # 🚀 Optimizasyon    : yalnız algoritma çalıştırma ve sonuçlar
+    if page == "📦 Malzeme Yükleme":
+        st.title("📦 Malzeme Yükleme")
+        st.caption("Taşınacak yükleri burada tanımlayın. Algoritma yalnızca "
+                   "aşağıdaki **Yük Listesi**'ni kullanır.")
+        project_name = st.session_state.get("proje_adi", "Yeni Proje")
+        project_desc = st.session_state.get("proje_aciklama", "")
+    else:
+        st.title("🧊 3D Araç Yükleme Optimizasyonu")
+        st.caption("EP · Layer Building · Tabu/SA · NFP Nested Packing · STEP/STL import")
+        col_pn, col_pd = st.columns([2, 3])
+        project_name = col_pn.text_input(
+            "📋 Proje Adı", value=st.session_state.get("proje_adi", "Yeni Proje"),
+            key="proje_adi")
+        project_desc = col_pd.text_input(
+            "Açıklama", value=st.session_state.get("proje_aciklama", ""),
+            key="proje_aciklama")
+    if page == "🚀 Optimizasyon":
+        # ── Hangi filo, hangi yük? Çalıştırmadan önce tek bakışta ────────
+        from filo_secimi import aktif_filo as _aktif_filo
+        _ana_ck, _ana_dr = _aktif_filo()
+        _oz1, _oz2 = st.columns(2)
+        if _ana_ck and _ana_dr:
+            _ana_plakalar = ", ".join(d.plaka for d in _ana_dr[:3])
+            if len(_ana_dr) > 3:
+                _ana_plakalar += f" (+{len(_ana_dr) - 3})"
+            _oz1.info(
+                f"🚚 **Çekici + dorse filosu** — {len(_ana_ck)} çekici, "
+                f"{len(_ana_dr)} dorse ({_ana_plakalar}). Kapasite KTY "
+                f"md.128'den hesaplanıyor, dingil yükü kontrol ediliyor. "
+                f"→ 🚚 Filo")
+        else:
+            _oz1.info("🚛 **Basit araç tablosu** (kenar çubuğu) kullanılıyor. "
+                      "Çekici/dorse ayrımı, mevzuat kapasitesi ve dingil "
+                      "kontrolü için → 🚚 Filo")
 
-    # Proje adı
-    col_pn, col_pd = st.columns([2,3])
-    project_name = col_pn.text_input("📋 Proje Adı", value="Yeni Proje")
-    project_desc = col_pd.text_input("Açıklama", value="")
+        _lr = st.session_state.get("load_rules_live",
+                                   st.session_state.get("load_rules",
+                                                        pd.DataFrame()))
+        if _lr is None or _lr.empty:
+            _oz2.warning("📦 **Yük listesi boş.** → 📦 Malzeme Yükleme "
+                         "sayfasından yük ekleyin.")
+        else:
+            _adet = int(pd.to_numeric(_lr.get("Adet"), errors="coerce")
+                        .fillna(0).sum())
+            _kg = float((pd.to_numeric(_lr.get("Adet"), errors="coerce").fillna(0)
+                         * pd.to_numeric(_lr.get("Ağırlık(kg)"),
+                                         errors="coerce").fillna(0)).sum())
+            _oz2.info(f"📦 **{len(_lr)} kalem · {_adet} parça · "
+                      f"{_kg:,.0f} kg** → 📦 Malzeme Yükleme".replace(",", "."))
+
     st.markdown("---")
 
-    # ── Yük Tanımı sekmeler ──────────────────────────────────────────────────
-    t_std, t_sw, t_xl = st.tabs([
-        "📦 Standart Yükler",
-        "📐 SolidWorks (STEP/STL)",
-        "📊 Excel'den İçe Aktar",
-    ])
+    if page == "📦 Malzeme Yükleme":
+        # ── Yük Tanımı sekmeler ──────────────────────────────────────────────────
+        t_std, t_sw, t_xl = st.tabs([
+            "📦 Standart Yükler",
+            "📐 SolidWorks (STEP/STL)",
+            "📊 Excel'den İçe Aktar",
+        ])
 
-    # — Standart
-    with t_std:
-        if "df_pallets" not in st.session_state:
-            st.session_state.df_pallets = pd.DataFrame({
-                "ID":          ["Euro-1","Euro-2","Silindir-1"],
-                "Şekil":       ["Dikdörtgen","Dikdörtgen","Silindir"],
-                "Genişlik (cm)":[80,80,80],
-                "Uzunluk (cm)":[120,120,80],
-                "Yükseklik (cm)":[140,140,120],
-                "Ağırlık (kg)":[250,180,300],
-                "Adet":        [6,6,4],
-                "Müşteri":     ["","",""],
-                "Öncelik":     [None,None,None],
-            })
-
-        # ── HAZIR PALET KÜTÜPHANESİ ──────────────────────────────────────
-        # Kütüphanedeki yükseklik ve ağırlık BOŞ paletindir. Uygulama ise
-        # yüklü paleti tek kutu sayıyor; bu yüzden kullanıcı paletin
-        # ÜSTÜNDEKİ yükü girer, palet darası otomatik EKLENİR (karar S-A).
-        _palet_render()
-
-        df_pallets = st.session_state.df_pallets
-
-    # — SolidWorks
-    with t_sw:
-        st.markdown("""
-#### 📐 STEP / STL Dosyası İçe Aktarım
-**SolidWorks'ten dışa aktarım:**
-- STL: *Dosya → Farklı Kaydet → STL* — **Birim: Santimetre**
-- STEP: *Dosya → Farklı Kaydet → STEP AP214*
-        """)
-
-        if not HAS_TRIMESH and not HAS_SHAPE:
-            st.error("⚠️ **trimesh kurulu değil.** Terminalde: `pip install trimesh`")
-        if not HAS_SHAPELY and not HAS_SHAPE:
-            st.warning("⚠️ **shapely kurulu değil.** Terminalde: `pip install shapely`")
-
-        col_unit, col_up = st.columns([1, 2])
-        with col_unit:
-            stl_unit = st.selectbox(
-                "📏 STL Birimi",
-                ["cm (SolidWorks varsayılanı)", "mm", "m", "inch"],
-                index=0,
-                help="SolidWorks → Farklı Kaydet → STL → Seçenekler → Birim"
-            )
-        _unit_map = {"cm (SolidWorks varsayılanı)":"cm","mm":"mm","m":"m","inch":"inch"}
-        _stl_unit_code = _unit_map[stl_unit]
-
-        with col_up:
-            up_files = st.file_uploader("Dosyaları sürükleyin", type=["stl","step","stp"],
-                                        accept_multiple_files=True,
-                                        disabled=not HAS_TRIMESH)
-
-        # ── Session state başlatma ─────────────────────────────────────────
-        if "sw_shapes" not in st.session_state:
-            st.session_state.sw_shapes = []
-        if "sw_staging" not in st.session_state:
-            st.session_state.sw_staging = []
-
-        # ── Yeni yüklenen dosyaları staging'e al ────────────────────────────
-        # Aynı dosya birden fazla kez eklenebilir — her seferinde yeni staging girdisi
-        if up_files and HAS_TRIMESH:
-            processed_this_run = set(st.session_state.get("_sw_processed_run", set()))
-            _MAX_MESH_MB = 80   # tek dosya sınırı — devasa mesh parse-DoS önlemi
-            for uf in up_files:
-                if uf.file_id in processed_this_run:
-                    continue
-                processed_this_run.add(uf.file_id)
-                if getattr(uf, "size", 0) and uf.size > _MAX_MESH_MB * 1024 * 1024:
-                    st.error(f"⛔ **{uf.name}**: {uf.size/1e6:.0f} MB — "
-                             f"tek dosya sınırı {_MAX_MESH_MB} MB. Mesh'i "
-                             f"sadeleştirip tekrar deneyin.")
-                    continue
-                _file_bytes = uf.read()
-                with tempfile.NamedTemporaryFile(suffix=Path(uf.name).suffix, delete=False) as tmp:
-                    tmp.write(_file_bytes); tmp_path = tmp.name
-                try:
-                    _ext = Path(uf.name).suffix.lower()
-                    with st.spinner(f"📐 {uf.name} analiz ediliyor..."):
-                        if _ext == ".stl":
-                            try:
-                                from shape_engine import load_all_stl_orientations as _lao
-                                _all_infos = _lao(tmp_path, unit=_stl_unit_code)
-                                # Otomatik en iyi yönelimi seç (en büyük taban)
-                                _auto_idx = max(range(len(_all_infos)),
-                                    key=lambda i: _all_infos[i].bbox_width * _all_infos[i].bbox_length)
-                                info_orig = _all_infos[_auto_idx]
-                            except Exception as _stl_e:
-                                from shape_engine import load_from_file as _lff
-                                _all_infos = None
-                                _auto_idx = 0
-                                info_orig = _lff(tmp_path, unit=_stl_unit_code)
-                        else:
-                            from shape_engine import load_from_file as _lff2
-                            _all_infos = None
-                            _auto_idx = 0
-                            info_orig = _lff2(tmp_path, unit=_stl_unit_code)
-                    import copy as _copy
-                    info = _copy.deepcopy(info_orig)
-                    # ID numaralandırma: display_id'yi weight kontrolünden ÖNCE hesapla
-                    base_name = Path(uf.name).stem
-                    existing_count = sum(
-                        1 for s in (st.session_state.sw_staging + st.session_state.sw_shapes)
-                        if s.get("base_name", "") == base_name
-                    )
-                    display_id = f"{base_name}-{existing_count + 1}"
-                    raw_wgt = float(info.actual_volume_cm3 * 0.002)
-                    # Birim hatası veya aşırı büyük geometriler için clamp
-                    if raw_wgt > 99990.0:
-                        st.warning(
-                            f"⚠️ **{display_id}**: Hesaplanan hacimden gelen tahmini ağırlık "
-                            f"çok büyük ({raw_wgt:,.0f} kg). "
-                            f"Muhtemelen **birim seçimi yanlış** — "
-                            f"STL birimi olarak **mm** seçtiğinizden emin olun. "
-                            f"Ağırlık 1 kg olarak ayarlandı, lütfen manuel girin."
-                        )
-                        default_wgt = 1.0
-                    else:
-                        default_wgt = max(0.1, raw_wgt)
-                    info.name = display_id
-                    # all_infos listesi varsa her elemanın adını güncelle
-                    if _all_infos:
-                        for _oi in _all_infos:
-                            _oi.name = display_id
-                    st.session_state.sw_staging.append({
-                        "name":            display_id,
-                        "base_name":       base_name,
-                        "file_name":       uf.name,
-                        "info":            info,
-                        "all_infos":       _all_infos,       # 3 yönelim (STL) veya None
-                        "orientation_idx": _auto_idx,        # seçili yönelim indeksi
-                        "quantity":        1,
-                        "weight":          default_wgt,
-                        "customer":        "",
-                        "unit":            _stl_unit_code,
-                    })
-                    st.success(f"✅ **{display_id}** analiz edildi — aşağıdan düzenleyip ekleyin.")
-                except Exception as e:
-                    st.error(f"❌ {uf.name}: {e}")
-                finally:
-                    try: os.unlink(tmp_path)
-                    except: pass
-            st.session_state["_sw_processed_run"] = processed_this_run
-
-        # ── Staging alanı: düzenle ve ekle ─────────────────────────────────
-        if st.session_state.sw_staging:
-            st.markdown("---")
-            st.markdown("### ✏️ Bekleyen Dosyalar — Düzenle & Ekle")
-            to_remove = []
-            for idx_s, s in enumerate(st.session_state.sw_staging):
-                info = s["info"]
-                with st.container(border=True):
-                    c_hdr, c_del = st.columns([10, 1])
-                    is_added = s["name"] in [_sw["name"] for _sw in st.session_state.sw_shapes]
-                    _badge = " &nbsp;<span style='background:#1b5e20;color:#a5d6a7;padding:2px 8px;border-radius:10px;font-size:.8rem'>✅ Eklendi</span>" if is_added else ""
-                    c_hdr.markdown(
-                        f"**📦 {s['name']}**{_badge} — "
-                        f"{info.bbox_width:.1f}×{info.bbox_length:.1f}×{info.bbox_height:.1f} cm  "
-                        f"|  %{info.fill_ratio*100:.0f} doluluk",
-                        unsafe_allow_html=True
-                    )
-                    if c_del.button("✖", key=f"stage_del_{idx_s}_{s['name']}",
-                                    help="İptal et"):
-                        # Direkt pop et — rerun'dan önce, yoksa to_remove reset'lenir
-                        st.session_state.sw_staging.pop(idx_s)
-                        st.rerun()
-
-                    # ── 3D Önizleme + Yönelim Seçici ─────────────────────────
-                    if s.get("all_infos"):
-                        def _render_stl_preview(si):
-                            """STL mesh'ini matplotlib ile CPU tabanlı PNG olarak render et."""
-                            import io as _io
-                            import numpy as _np
-                            import matplotlib.pyplot as _plt
-                            from mpl_toolkits.mplot3d.art3d import Poly3DCollection as _P3C
-                            if si.mesh_vertices is None or si.mesh_faces is None:
-                                return None
-                            verts = si.mesh_vertices
-                            faces = si.mesh_faces
-                            # Çok fazla üçgeni sınırla
-                            if len(faces) > 3000:
-                                rng = _np.random.default_rng(42)
-                                idx = rng.choice(len(faces), 3000, replace=False)
-                                faces = faces[idx]
-                            triangles = verts[faces]
-                            fig = _plt.figure(figsize=(4, 3), facecolor="#0D1117")
-                            ax = fig.add_subplot(111, projection="3d")
-                            ax.set_facecolor("#161b22")
-                            poly = _P3C(triangles, alpha=0.85,
-                                        facecolor="#1565C0", edgecolor="none")
-                            ax.add_collection3d(poly)
-                            W, L, H = si.bbox_width, si.bbox_length, si.bbox_height
-                            ax.set_xlim(0, W); ax.set_ylim(0, L); ax.set_zlim(0, H)
-                            ax.set_xlabel("G", color="#aaa", fontsize=7)
-                            ax.set_ylabel("U", color="#aaa", fontsize=7)
-                            ax.set_zlabel("Y", color="#aaa", fontsize=7)
-                            ax.tick_params(colors="#666", labelsize=6)
-                            for pane in (ax.xaxis.pane, ax.yaxis.pane, ax.zaxis.pane):
-                                pane.set_facecolor("#1a1f2e")
-                                pane.set_edgecolor("#333")
-                            ax.set_title(
-                                f"{W:.0f} × {L:.0f} × {H:.0f} cm",
-                                color="white", fontsize=9, pad=4)
-                            buf = _io.BytesIO()
-                            _plt.savefig(buf, format="png", dpi=90,
-                                         bbox_inches="tight", facecolor="#0D1117")
-                            buf.seek(0)
-                            _plt.close(fig)
-                            return buf.read()
-
-                        _prev_key = f"_stlprev_{s['name']}_{s['orientation_idx']}"
-                        if _prev_key not in st.session_state:
-                            with st.spinner("3D önizleme oluşturuluyor..."):
-                                st.session_state[_prev_key] = _render_stl_preview(s["info"])
-
-                        _col_prev, _col_orient = st.columns([1, 1])
-                        with _col_prev:
-                            _png = st.session_state.get(_prev_key)
-                            if _png:
-                                st.image(_png, width="stretch",
-                                         caption="Seçili yönelim önizlemesi")
-                            else:
-                                st.info("Önizleme üretilemedi.")
-
-                        with _col_orient:
-                            st.markdown("**Taban yüzeyini seç:**")
-                            _orient_labels = [o[3] for o in s["all_infos"][0].available_orientations]
-                            _cur_label = _orient_labels[s["orientation_idx"]]
-                            _sel_orient = st.radio(
-                                "Yönelim:",
-                                _orient_labels,
-                                index=s["orientation_idx"],
-                                key=f"stl_orient_{idx_s}_{s['name']}",
-                                label_visibility="collapsed",
-                            )
-                            _new_idx = _orient_labels.index(_sel_orient)
-                            if _new_idx != s["orientation_idx"]:
-                                s["orientation_idx"] = _new_idx
-                                s["info"] = s["all_infos"][_new_idx]
-                                s["info"].name = s["name"]
-                                # Ağırlık tahmini de güncelle
-                                _nw = float(s["info"].actual_volume_cm3 * 0.002)
-                                if _nw < 99990.0:
-                                    s["weight"] = max(0.1, _nw)
-                                st.rerun()
-
-                    if HAS_SHAPE and hasattr(shape_summary, '__call__'):
-                        with st.expander("📊 Geometri detayları"):
-                            st.code(shape_summary(info))
-                    if max(info.bbox_width, info.bbox_length, info.bbox_height) < 5.0:
-                        st.warning("⚠️ Parça çok küçük — birim seçicisini kontrol edin.")
-
-                    c1, c2, c3 = st.columns(3)
-                    qty = c1.number_input("Adet", 1, 9999, value=s["quantity"],
-                                          key=f"stage_qty_{idx_s}_{s['name']}")
-                    wgt = c2.number_input("Ağırlık (kg)", 0.0, 9_999_999.0,
-                                          value=min(float(s["weight"]), 9_999_990.0), step=0.1,
-                                          key=f"stage_wgt_{idx_s}_{s['name']}")
-                    cst = c3.text_input("Müşteri", value=s["customer"],
-                                        key=f"stage_cst_{idx_s}_{s['name']}")
-
-                    is_added = s["name"] in [_sw["name"] for _sw in st.session_state.sw_shapes]
-
-                    if st.button(
-                        "🔄 Güncelle" if is_added else "➕ Parça Listesine Ekle",
-                        key=f"stage_add_{idx_s}_{s['name']}",
-                        type="primary", width="stretch"
-                    ):
-                        final_name = s["name"]
-                        # Staging'deki güncel değerleri kaydet
-                        s["quantity"] = qty
-                        s["weight"]   = wgt
-                        s["customer"] = cst
-
-                        existing_ids = [_sw["name"] for _sw in st.session_state.sw_shapes]
-                        if final_name in existing_ids:
-                            for _sw in st.session_state.sw_shapes:
-                                if _sw["name"] == final_name:
-                                    _sw["quantity"] = qty
-                                    _sw["weight"]   = wgt
-                                    _sw["customer"] = cst
-                            # load_rules güncelle
-                            if "load_rules" in st.session_state and not st.session_state.load_rules.empty:
-                                _mask = st.session_state.load_rules["ID"] == final_name
-                                if _mask.any():
-                                    st.session_state.load_rules.loc[_mask, "Adet"]        = qty
-                                    st.session_state.load_rules.loc[_mask, "Ağırlık(kg)"] = wgt
-                                    st.session_state.load_rules.loc[_mask, "Müşteri"]     = cst
-                        else:
-                            st.session_state.sw_shapes.append({
-                                "name":      final_name,
-                                "base_name": s.get("base_name", final_name),
-                                "info":      info,
-                                "quantity":  qty,
-                                "weight":    min(float(wgt), 9_999_990.0),
-                                "customer":  cst,
-                                "unit":      s["unit"],
-                            })
-                        st.session_state[f"swq_{final_name}"] = qty
-                        st.session_state[f"sww_{final_name}"] = wgt
-                        st.session_state[f"swc_{final_name}"] = cst
-                        # Staging'den SİLME — kullanıcı ✖ ile siler
-                        st.rerun()
-
-        # ── Eklenmiş SW parçaları — canlı düzenleme tablosu ────────────────
-        if st.session_state.sw_shapes:
-            st.markdown("---")
-            st.markdown(f"### ✅ Parça Listesine Eklenmiş ({len(st.session_state.sw_shapes)} dosya)")
-            st.caption("Aşağıdaki değişiklikler Yük Listesi & Yerleştirme Kuralları ile senkronize edilir.")
-
-            # data_editor ile canlı düzenleme
-            sw_rows = []
-            for s in st.session_state.sw_shapes:
-                info = s["info"]
-                sw_rows.append({
-                    "ID":           s["name"],
-                    "Dosya":        s.get("file_name", s["name"]),
-                    "G(cm)":        round(info.bbox_width, 1),
-                    "U(cm)":        round(info.bbox_length, 1),
-                    "Y(cm)":        round(info.bbox_height, 1),
-                    "Adet":         int(st.session_state.get(f"swq_{s['name']}", s["quantity"])),
-                    "Ağırlık(kg)":  float(st.session_state.get(f"sww_{s['name']}", s["weight"])),
-                    "Müşteri":      str(st.session_state.get(f"swc_{s['name']}", s["customer"])),
+        # — Standart
+        with t_std:
+            if "df_pallets" not in st.session_state:
+                st.session_state.df_pallets = pd.DataFrame({
+                    "ID":          ["Euro-1","Euro-2","Silindir-1"],
+                    "Şekil":       ["Dikdörtgen","Dikdörtgen","Silindir"],
+                    "Genişlik (cm)":[80,80,80],
+                    "Uzunluk (cm)":[120,120,80],
+                    "Yükseklik (cm)":[140,140,120],
+                    "Ağırlık (kg)":[250,180,300],
+                    "Adet":        [6,6,4],
+                    "Müşteri":     ["","",""],
+                    "Öncelik":     [None,None,None],
                 })
 
-            sw_df = pd.DataFrame(sw_rows)
-            sw_edited = st.data_editor(
-                sw_df,
+            # ── HAZIR PALET KÜTÜPHANESİ ──────────────────────────────────────
+            # Kütüphanedeki yükseklik ve ağırlık BOŞ paletindir. Uygulama ise
+            # yüklü paleti tek kutu sayıyor; bu yüzden kullanıcı paletin
+            # ÜSTÜNDEKİ yükü girer, palet darası otomatik EKLENİR (karar S-A).
+            _palet_render()
+
+            df_pallets = st.session_state.df_pallets
+
+        # — SolidWorks
+        with t_sw:
+            st.markdown("""
+    #### 📐 STEP / STL Dosyası İçe Aktarım
+    **SolidWorks'ten dışa aktarım:**
+    - STL: *Dosya → Farklı Kaydet → STL* — **Birim: Santimetre**
+    - STEP: *Dosya → Farklı Kaydet → STEP AP214*
+            """)
+
+            if not HAS_TRIMESH and not HAS_SHAPE:
+                st.error("⚠️ **trimesh kurulu değil.** Terminalde: `pip install trimesh`")
+            if not HAS_SHAPELY and not HAS_SHAPE:
+                st.warning("⚠️ **shapely kurulu değil.** Terminalde: `pip install shapely`")
+
+            col_unit, col_up = st.columns([1, 2])
+            with col_unit:
+                stl_unit = st.selectbox(
+                    "📏 STL Birimi",
+                    ["cm (SolidWorks varsayılanı)", "mm", "m", "inch"],
+                    index=0,
+                    help="SolidWorks → Farklı Kaydet → STL → Seçenekler → Birim"
+                )
+            _unit_map = {"cm (SolidWorks varsayılanı)":"cm","mm":"mm","m":"m","inch":"inch"}
+            _stl_unit_code = _unit_map[stl_unit]
+
+            with col_up:
+                up_files = st.file_uploader("Dosyaları sürükleyin", type=["stl","step","stp"],
+                                            accept_multiple_files=True,
+                                            disabled=not HAS_TRIMESH)
+
+            # ── Session state başlatma ─────────────────────────────────────────
+            if "sw_shapes" not in st.session_state:
+                st.session_state.sw_shapes = []
+            if "sw_staging" not in st.session_state:
+                st.session_state.sw_staging = []
+
+            # ── Yeni yüklenen dosyaları staging'e al ────────────────────────────
+            # Aynı dosya birden fazla kez eklenebilir — her seferinde yeni staging girdisi
+            if up_files and HAS_TRIMESH:
+                processed_this_run = set(st.session_state.get("_sw_processed_run", set()))
+                _MAX_MESH_MB = 80   # tek dosya sınırı — devasa mesh parse-DoS önlemi
+                for uf in up_files:
+                    if uf.file_id in processed_this_run:
+                        continue
+                    processed_this_run.add(uf.file_id)
+                    if getattr(uf, "size", 0) and uf.size > _MAX_MESH_MB * 1024 * 1024:
+                        st.error(f"⛔ **{uf.name}**: {uf.size/1e6:.0f} MB — "
+                                 f"tek dosya sınırı {_MAX_MESH_MB} MB. Mesh'i "
+                                 f"sadeleştirip tekrar deneyin.")
+                        continue
+                    _file_bytes = uf.read()
+                    with tempfile.NamedTemporaryFile(suffix=Path(uf.name).suffix, delete=False) as tmp:
+                        tmp.write(_file_bytes); tmp_path = tmp.name
+                    try:
+                        _ext = Path(uf.name).suffix.lower()
+                        with st.spinner(f"📐 {uf.name} analiz ediliyor..."):
+                            if _ext == ".stl":
+                                try:
+                                    from shape_engine import load_all_stl_orientations as _lao
+                                    _all_infos = _lao(tmp_path, unit=_stl_unit_code)
+                                    # Otomatik en iyi yönelimi seç (en büyük taban)
+                                    _auto_idx = max(range(len(_all_infos)),
+                                        key=lambda i: _all_infos[i].bbox_width * _all_infos[i].bbox_length)
+                                    info_orig = _all_infos[_auto_idx]
+                                except Exception as _stl_e:
+                                    from shape_engine import load_from_file as _lff
+                                    _all_infos = None
+                                    _auto_idx = 0
+                                    info_orig = _lff(tmp_path, unit=_stl_unit_code)
+                            else:
+                                from shape_engine import load_from_file as _lff2
+                                _all_infos = None
+                                _auto_idx = 0
+                                info_orig = _lff2(tmp_path, unit=_stl_unit_code)
+                        import copy as _copy
+                        info = _copy.deepcopy(info_orig)
+                        # ID numaralandırma: display_id'yi weight kontrolünden ÖNCE hesapla
+                        base_name = Path(uf.name).stem
+                        existing_count = sum(
+                            1 for s in (st.session_state.sw_staging + st.session_state.sw_shapes)
+                            if s.get("base_name", "") == base_name
+                        )
+                        display_id = f"{base_name}-{existing_count + 1}"
+                        raw_wgt = float(info.actual_volume_cm3 * 0.002)
+                        # Birim hatası veya aşırı büyük geometriler için clamp
+                        if raw_wgt > 99990.0:
+                            st.warning(
+                                f"⚠️ **{display_id}**: Hesaplanan hacimden gelen tahmini ağırlık "
+                                f"çok büyük ({raw_wgt:,.0f} kg). "
+                                f"Muhtemelen **birim seçimi yanlış** — "
+                                f"STL birimi olarak **mm** seçtiğinizden emin olun. "
+                                f"Ağırlık 1 kg olarak ayarlandı, lütfen manuel girin."
+                            )
+                            default_wgt = 1.0
+                        else:
+                            default_wgt = max(0.1, raw_wgt)
+                        info.name = display_id
+                        # all_infos listesi varsa her elemanın adını güncelle
+                        if _all_infos:
+                            for _oi in _all_infos:
+                                _oi.name = display_id
+                        st.session_state.sw_staging.append({
+                            "name":            display_id,
+                            "base_name":       base_name,
+                            "file_name":       uf.name,
+                            "info":            info,
+                            "all_infos":       _all_infos,       # 3 yönelim (STL) veya None
+                            "orientation_idx": _auto_idx,        # seçili yönelim indeksi
+                            "quantity":        1,
+                            "weight":          default_wgt,
+                            "customer":        "",
+                            "unit":            _stl_unit_code,
+                        })
+                        st.success(f"✅ **{display_id}** analiz edildi — aşağıdan düzenleyip ekleyin.")
+                    except Exception as e:
+                        st.error(f"❌ {uf.name}: {e}")
+                    finally:
+                        try: os.unlink(tmp_path)
+                        except: pass
+                st.session_state["_sw_processed_run"] = processed_this_run
+
+            # ── Staging alanı: düzenle ve ekle ─────────────────────────────────
+            if st.session_state.sw_staging:
+                st.markdown("---")
+                st.markdown("### ✏️ Bekleyen Dosyalar — Düzenle & Ekle")
+                to_remove = []
+                for idx_s, s in enumerate(st.session_state.sw_staging):
+                    info = s["info"]
+                    with st.container(border=True):
+                        c_hdr, c_del = st.columns([10, 1])
+                        is_added = s["name"] in [_sw["name"] for _sw in st.session_state.sw_shapes]
+                        _badge = " &nbsp;<span style='background:#1b5e20;color:#a5d6a7;padding:2px 8px;border-radius:10px;font-size:.8rem'>✅ Eklendi</span>" if is_added else ""
+                        c_hdr.markdown(
+                            f"**📦 {s['name']}**{_badge} — "
+                            f"{info.bbox_width:.1f}×{info.bbox_length:.1f}×{info.bbox_height:.1f} cm  "
+                            f"|  %{info.fill_ratio*100:.0f} doluluk",
+                            unsafe_allow_html=True
+                        )
+                        if c_del.button("✖", key=f"stage_del_{idx_s}_{s['name']}",
+                                        help="İptal et"):
+                            # Direkt pop et — rerun'dan önce, yoksa to_remove reset'lenir
+                            st.session_state.sw_staging.pop(idx_s)
+                            st.rerun()
+
+                        # ── 3D Önizleme + Yönelim Seçici ─────────────────────────
+                        if s.get("all_infos"):
+                            def _render_stl_preview(si):
+                                """STL mesh'ini matplotlib ile CPU tabanlı PNG olarak render et."""
+                                import io as _io
+                                import numpy as _np
+                                import matplotlib.pyplot as _plt
+                                from mpl_toolkits.mplot3d.art3d import Poly3DCollection as _P3C
+                                if si.mesh_vertices is None or si.mesh_faces is None:
+                                    return None
+                                verts = si.mesh_vertices
+                                faces = si.mesh_faces
+                                # Çok fazla üçgeni sınırla
+                                if len(faces) > 3000:
+                                    rng = _np.random.default_rng(42)
+                                    idx = rng.choice(len(faces), 3000, replace=False)
+                                    faces = faces[idx]
+                                triangles = verts[faces]
+                                fig = _plt.figure(figsize=(4, 3), facecolor="#0D1117")
+                                ax = fig.add_subplot(111, projection="3d")
+                                ax.set_facecolor("#161b22")
+                                poly = _P3C(triangles, alpha=0.85,
+                                            facecolor="#1565C0", edgecolor="none")
+                                ax.add_collection3d(poly)
+                                W, L, H = si.bbox_width, si.bbox_length, si.bbox_height
+                                ax.set_xlim(0, W); ax.set_ylim(0, L); ax.set_zlim(0, H)
+                                ax.set_xlabel("G", color="#aaa", fontsize=7)
+                                ax.set_ylabel("U", color="#aaa", fontsize=7)
+                                ax.set_zlabel("Y", color="#aaa", fontsize=7)
+                                ax.tick_params(colors="#666", labelsize=6)
+                                for pane in (ax.xaxis.pane, ax.yaxis.pane, ax.zaxis.pane):
+                                    pane.set_facecolor("#1a1f2e")
+                                    pane.set_edgecolor("#333")
+                                ax.set_title(
+                                    f"{W:.0f} × {L:.0f} × {H:.0f} cm",
+                                    color="white", fontsize=9, pad=4)
+                                buf = _io.BytesIO()
+                                _plt.savefig(buf, format="png", dpi=90,
+                                             bbox_inches="tight", facecolor="#0D1117")
+                                buf.seek(0)
+                                _plt.close(fig)
+                                return buf.read()
+
+                            _prev_key = f"_stlprev_{s['name']}_{s['orientation_idx']}"
+                            if _prev_key not in st.session_state:
+                                with st.spinner("3D önizleme oluşturuluyor..."):
+                                    st.session_state[_prev_key] = _render_stl_preview(s["info"])
+
+                            _col_prev, _col_orient = st.columns([1, 1])
+                            with _col_prev:
+                                _png = st.session_state.get(_prev_key)
+                                if _png:
+                                    st.image(_png, width="stretch",
+                                             caption="Seçili yönelim önizlemesi")
+                                else:
+                                    st.info("Önizleme üretilemedi.")
+
+                            with _col_orient:
+                                st.markdown("**Taban yüzeyini seç:**")
+                                _orient_labels = [o[3] for o in s["all_infos"][0].available_orientations]
+                                _cur_label = _orient_labels[s["orientation_idx"]]
+                                _sel_orient = st.radio(
+                                    "Yönelim:",
+                                    _orient_labels,
+                                    index=s["orientation_idx"],
+                                    key=f"stl_orient_{idx_s}_{s['name']}",
+                                    label_visibility="collapsed",
+                                )
+                                _new_idx = _orient_labels.index(_sel_orient)
+                                if _new_idx != s["orientation_idx"]:
+                                    s["orientation_idx"] = _new_idx
+                                    s["info"] = s["all_infos"][_new_idx]
+                                    s["info"].name = s["name"]
+                                    # Ağırlık tahmini de güncelle
+                                    _nw = float(s["info"].actual_volume_cm3 * 0.002)
+                                    if _nw < 99990.0:
+                                        s["weight"] = max(0.1, _nw)
+                                    st.rerun()
+
+                        if HAS_SHAPE and hasattr(shape_summary, '__call__'):
+                            with st.expander("📊 Geometri detayları"):
+                                st.code(shape_summary(info))
+                        if max(info.bbox_width, info.bbox_length, info.bbox_height) < 5.0:
+                            st.warning("⚠️ Parça çok küçük — birim seçicisini kontrol edin.")
+
+                        c1, c2, c3 = st.columns(3)
+                        qty = c1.number_input("Adet", 1, 9999, value=s["quantity"],
+                                              key=f"stage_qty_{idx_s}_{s['name']}")
+                        wgt = c2.number_input("Ağırlık (kg)", 0.0, 9_999_999.0,
+                                              value=min(float(s["weight"]), 9_999_990.0), step=0.1,
+                                              key=f"stage_wgt_{idx_s}_{s['name']}")
+                        cst = c3.text_input("Müşteri", value=s["customer"],
+                                            key=f"stage_cst_{idx_s}_{s['name']}")
+
+                        is_added = s["name"] in [_sw["name"] for _sw in st.session_state.sw_shapes]
+
+                        if st.button(
+                            "🔄 Güncelle" if is_added else "➕ Parça Listesine Ekle",
+                            key=f"stage_add_{idx_s}_{s['name']}",
+                            type="primary", width="stretch"
+                        ):
+                            final_name = s["name"]
+                            # Staging'deki güncel değerleri kaydet
+                            s["quantity"] = qty
+                            s["weight"]   = wgt
+                            s["customer"] = cst
+
+                            existing_ids = [_sw["name"] for _sw in st.session_state.sw_shapes]
+                            if final_name in existing_ids:
+                                for _sw in st.session_state.sw_shapes:
+                                    if _sw["name"] == final_name:
+                                        _sw["quantity"] = qty
+                                        _sw["weight"]   = wgt
+                                        _sw["customer"] = cst
+                                # load_rules güncelle
+                                if "load_rules" in st.session_state and not st.session_state.load_rules.empty:
+                                    _mask = st.session_state.load_rules["ID"] == final_name
+                                    if _mask.any():
+                                        st.session_state.load_rules.loc[_mask, "Adet"]        = qty
+                                        st.session_state.load_rules.loc[_mask, "Ağırlık(kg)"] = wgt
+                                        st.session_state.load_rules.loc[_mask, "Müşteri"]     = cst
+                            else:
+                                st.session_state.sw_shapes.append({
+                                    "name":      final_name,
+                                    "base_name": s.get("base_name", final_name),
+                                    "info":      info,
+                                    "quantity":  qty,
+                                    "weight":    min(float(wgt), 9_999_990.0),
+                                    "customer":  cst,
+                                    "unit":      s["unit"],
+                                })
+                            st.session_state[f"swq_{final_name}"] = qty
+                            st.session_state[f"sww_{final_name}"] = wgt
+                            st.session_state[f"swc_{final_name}"] = cst
+                            # Staging'den SİLME — kullanıcı ✖ ile siler
+                            st.rerun()
+
+            # ── Eklenmiş SW parçaları — canlı düzenleme tablosu ────────────────
+            if st.session_state.sw_shapes:
+                st.markdown("---")
+                st.markdown(f"### ✅ Parça Listesine Eklenmiş ({len(st.session_state.sw_shapes)} dosya)")
+                st.caption("Aşağıdaki değişiklikler Yük Listesi & Yerleştirme Kuralları ile senkronize edilir.")
+
+                # data_editor ile canlı düzenleme
+                sw_rows = []
+                for s in st.session_state.sw_shapes:
+                    info = s["info"]
+                    sw_rows.append({
+                        "ID":           s["name"],
+                        "Dosya":        s.get("file_name", s["name"]),
+                        "G(cm)":        round(info.bbox_width, 1),
+                        "U(cm)":        round(info.bbox_length, 1),
+                        "Y(cm)":        round(info.bbox_height, 1),
+                        "Adet":         int(st.session_state.get(f"swq_{s['name']}", s["quantity"])),
+                        "Ağırlık(kg)":  float(st.session_state.get(f"sww_{s['name']}", s["weight"])),
+                        "Müşteri":      str(st.session_state.get(f"swc_{s['name']}", s["customer"])),
+                    })
+
+                sw_df = pd.DataFrame(sw_rows)
+                sw_edited = st.data_editor(
+                    sw_df,
+                    width="stretch",
+                    hide_index=True,
+                    num_rows="dynamic",
+                    disabled=["ID","Dosya","G(cm)","U(cm)","Y(cm)"],
+                    column_config={
+                        "ID":          st.column_config.TextColumn("🏷️ ID"),
+                        "Dosya":       st.column_config.TextColumn("📂 Dosya"),
+                        "G(cm)":       st.column_config.NumberColumn("G(cm)", format="%.1f"),
+                        "U(cm)":       st.column_config.NumberColumn("U(cm)", format="%.1f"),
+                        "Y(cm)":       st.column_config.NumberColumn("Y(cm)", format="%.1f"),
+                        "Adet":        st.column_config.NumberColumn("Adet", min_value=0),
+                        "Ağırlık(kg)": st.column_config.NumberColumn("⚖️ Ağırlık(kg)", format="%.2f"),
+                        "Müşteri":     st.column_config.TextColumn("👤 Müşteri"),
+                    },
+                    key="sw_shapes_editor",
+                )
+
+                # ── Duplicate ID kontrolü (eski girdileri otomatik temizle) ────────
+                if "ID" in sw_edited.columns:
+                    dup_mask = sw_edited["ID"].duplicated(keep="first")
+                    if dup_mask.any():
+                        sw_edited = sw_edited[~dup_mask].reset_index(drop=True)
+                        st.session_state.sw_shapes = [
+                            s for s in st.session_state.sw_shapes
+                            if s["name"] in set(sw_edited["ID"].tolist())
+                        ]
+                        st.warning("⚠️ Duplicate ID'ler temizlendi. Lütfen aynı dosyayı tekrar ekleyin.")
+
+                # Değişiklikleri sw_shapes ve load_rules'a yansıt
+                curr_sw_ids = set(sw_edited["ID"].tolist()) if not sw_edited.empty else set()
+                prev_sw_ids = {s["name"] for s in st.session_state.sw_shapes}
+                deleted_sw  = prev_sw_ids - curr_sw_ids
+                if deleted_sw:
+                    st.session_state.sw_shapes = [
+                        s for s in st.session_state.sw_shapes
+                        if s["name"] not in deleted_sw
+                    ]
+                    st.session_state.deleted_ids |= deleted_sw
+                    if "load_rules" in st.session_state and not st.session_state.load_rules.empty:
+                        st.session_state.load_rules = st.session_state.load_rules[
+                            ~st.session_state.load_rules["ID"].isin(deleted_sw)
+                        ].reset_index(drop=True)
+                    st.rerun()
+
+                if not sw_edited.empty:
+                    for _, row in sw_edited.iterrows():
+                        pid = str(row["ID"])
+                        new_qty = int(row.get("Adet", 1))
+                        new_wgt = float(row.get("Ağırlık(kg)", 0))
+                        new_cst = str(row.get("Müşteri", ""))
+                        # Session state key güncelle
+                        st.session_state[f"swq_{pid}"] = new_qty
+                        st.session_state[f"sww_{pid}"] = new_wgt
+                        st.session_state[f"swc_{pid}"] = new_cst
+                        # sw_shapes güncelle
+                        for _sw in st.session_state.get("sw_shapes", []):
+                            if _sw["name"] == pid:
+                                _sw["quantity"] = new_qty
+                                _sw["weight"]   = new_wgt
+                                _sw["customer"] = new_cst
+                        # load_rules senkronizasyonu
+                        if "load_rules" in st.session_state and not st.session_state.load_rules.empty:
+                            mask = st.session_state.load_rules["ID"] == pid
+                            if mask.any():
+                                st.session_state.load_rules.loc[mask, "Adet"]        = new_qty
+                                st.session_state.load_rules.loc[mask, "Ağırlık(kg)"] = new_wgt
+                                st.session_state.load_rules.loc[mask, "Müşteri"]     = new_cst
+                        # staging'de bekleyen varsa güncelle
+                        for _s in st.session_state.get("sw_staging", []):
+                            if _s["name"] == pid:
+                                _s["quantity"] = new_qty
+                                _s["weight"]   = new_wgt
+                                _s["customer"] = new_cst
+
+                if st.button("🗑️ Tüm SW Parçalarını Temizle"):
+                    st.session_state.sw_shapes  = []
+                    st.session_state.sw_staging = []
+                    st.session_state.pop("_sw_processed_run", None)
+                    st.rerun()
+
+        # ── Excel İçe Aktarım ────────────────────────────────────────────────────
+        with t_xl:
+            st.markdown("#### 📊 Excel'den Araç ve Yük Verisi İçe Aktar")
+
+            col_dl, col_up = st.columns([1, 2])
+            with col_dl:
+                st.markdown("**Excel Şablonu**")
+                st.caption("Uygun kolon başlıklarına sahip hazır şablon:")
+                import os as _os
+                _tpl_search = [
+                    "loadplan_template.xlsx",
+                    _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
+                                  "loadplan_template.xlsx"),
+                    _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
+                                  "..", "loadplan_template.xlsx"),
+                ]
+                _tpl_bytes = None
+                for _p in _tpl_search:
+                    try:
+                        with open(_p, "rb") as _tf:
+                            _tpl_bytes = _tf.read()
+                        break
+                    except FileNotFoundError:
+                        continue
+                if _tpl_bytes:
+                    st.download_button(
+                        "⬇ Boş Şablonu İndir",
+                        data=_tpl_bytes,
+                        file_name="loadplan_template.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        width="stretch",
+                        type="primary",
+                    )
+                else:
+                    st.caption("loadplan_template.xlsx bulunamadı.")
+
+            with col_up:
+                st.markdown("**2. Doldurulmuş Dosyayı Yükle**")
+                st.caption("Şablonu doldurup yükleyin — Araçlar ve Yükler sayfaları otomatik okunur:")
+                xl_file = st.file_uploader(
+                    "Excel dosyası seç",
+                    type=["xlsx", "xls"],
+                    key="xl_import_uploader",
+                    label_visibility="collapsed",
+                )
+
+            if xl_file is not None:
+                xl_bytes = xl_file.read()
+                with st.spinner("Excel okunuyor…"):
+                    df_t_xl, df_p_xl, xl_errors = import_excel(xl_bytes)
+
+                if xl_errors:
+                    for err in xl_errors:
+                        st.error(f"❌ {err}")
+
+                # Araçlar önizleme
+                if df_t_xl is not None and not df_t_xl.empty:
+                    st.markdown(f"**🚛 Araçlar** — {len(df_t_xl)} satır okundu")
+                    st.dataframe(df_t_xl, hide_index=True, width="stretch")
+                elif not xl_errors:
+                    st.warning("Araçlar sayfası bulunamadı veya veri yok.")
+
+                # Yükler önizleme
+                if df_p_xl is not None and not df_p_xl.empty:
+                    st.markdown(f"**📦 Yükler** — {len(df_p_xl)} satır okundu")
+                    st.dataframe(df_p_xl, hide_index=True, width="stretch",
+                        column_config={
+                            "Altına yerleştirilemez": st.column_config.CheckboxColumn("🚫 Altına"),
+                            "Üstüne yerleştirilemez": st.column_config.CheckboxColumn("⛔ Üstüne"),
+                            "Rotasyon":               st.column_config.CheckboxColumn("🔄 Rot."),
+                            "Min. Aralık (cm)":       st.column_config.NumberColumn(
+                                "↔️ Min. Aralık", width="small"),
+                            "Öncelik":                st.column_config.NumberColumn(
+                                "🚚 Öncelik", width="small",
+                                help="0/boş = normal · 1 = kapıya en yakın"),
+                        })
+                elif not xl_errors:
+                    st.warning("Yükler sayfası bulunamadı veya veri yok.")
+
+                # Uygula butonu
+                if (df_t_xl is not None or df_p_xl is not None) and not xl_errors:
+                    _xl_mode = st.radio(
+                        "Mevcut verilerle ne yapılsın?",
+                        ["🔄 Üzerine yaz (mevcut verileri sil)", "➕ Mevcut veriye ekle"],
+                        horizontal=True, key="xl_import_mode",
+                    )
+                    if st.button("✅ İçe Aktarımı Uygula", type="primary", width="stretch"):
+                        _overwrite = "Üzerine yaz" in _xl_mode
+
+                        # Araçlar
+                        if df_t_xl is not None and not df_t_xl.empty:
+                            if _overwrite:
+                                st.session_state.df_trucks = df_t_xl.copy()
+                            else:
+                                existing_t = st.session_state.get("df_trucks", pd.DataFrame())
+                                st.session_state.df_trucks = pd.concat(
+                                    [existing_t, df_t_xl], ignore_index=True
+                                ).drop_duplicates(subset=["ID"], keep="last").reset_index(drop=True)
+                            # Araç tablosu base'i değişti → editör delta'ları artık
+                            # geçersiz; key'i ve live kopyayı temizle (yanlış hizalama önlenir)
+                            st.session_state.pop("df_trucks_editor", None)
+                            st.session_state.pop("df_trucks_live", None)
+                            st.success(f"✅ {len(df_t_xl)} araç yüklendi.")
+
+                        # Yükler
+                        if df_p_xl is not None and not df_p_xl.empty:
+                            # df_pallets güncelle
+                            _pal_cols = ["ID", "Şekil", "Genişlik (cm)", "Uzunluk (cm)",
+                                         "Yükseklik (cm)", "Ağırlık (kg)", "Adet", "Müşteri",
+                                         "Öncelik"]
+                            # Öncelik sütunu yoksa boş oluştur (geriye dönük uyumluluk)
+                            for _c in _pal_cols:
+                                if _c not in df_p_xl.columns:
+                                    df_p_xl[_c] = None
+                            _df_pal_new = df_p_xl[_pal_cols].copy()
+                            _df_pal_new = _df_pal_new.rename(columns={
+                                "Ağırlık (kg)": "Ağırlık (kg)",
+                            })
+                            if _overwrite:
+                                st.session_state.df_pallets = _df_pal_new
+                                # Yük listesini de sıfırla
+                                st.session_state.pop("load_rules", None)
+                                st.session_state.pop("deleted_ids", None)
+                            else:
+                                existing_p = st.session_state.get("df_pallets", pd.DataFrame())
+                                st.session_state.df_pallets = pd.concat(
+                                    [existing_p, _df_pal_new], ignore_index=True
+                                ).drop_duplicates(subset=["ID"], keep="last").reset_index(drop=True)
+
+                            # load_rules'a doğrudan ekle (kural sütunlarıyla)
+                            _lr_rows = []
+                            _existing_lr_ids = set(
+                                st.session_state.get("load_rules", pd.DataFrame()).get("ID", [])
+                                if "load_rules" in st.session_state else []
+                            )
+                            for _, _row in df_p_xl.iterrows():
+                                _pid = str(_row["ID"])
+                                if not _overwrite and _pid in _existing_lr_ids:
+                                    continue
+                                _lr_rows.append({
+                                    "Kaynak": "Excel",
+                                    "ID": _pid,
+                                    "Şekil": _row.get("Şekil", "Dikdörtgen"),
+                                    "G(cm)": float(_row.get("Genişlik (cm)", 0)),
+                                    "U(cm)": float(_row.get("Uzunluk (cm)", 0)),
+                                    "Y(cm)": float(_row.get("Yükseklik (cm)", 0)),
+                                    "Adet": int(_row.get("Adet", 1)),
+                                    "Ağırlık(kg)": float(_row.get("Ağırlık (kg)", 0)),
+                                    "Müşteri": str(_row.get("Müşteri", "")),
+                                    "Altına yerleştirilemez": bool(_row.get("Altına yerleştirilemez", False)),
+                                    "Üstüne yerleştirilemez": bool(_row.get("Üstüne yerleştirilemez", False)),
+                                    "Rotasyon": bool(_row.get("Rotasyon", True)),
+                                    "Min. Aralık (cm)": int(_row.get("Min. Aralık (cm)", 0)),
+                                    "Öncelik": int(_row["Öncelik"]) if "Öncelik" in _row and str(_row.get("Öncelik","")).strip() not in ("","nan","None") else None,
+                                })
+                            if _lr_rows:
+                                _new_lr = pd.DataFrame(_lr_rows)
+                                if _overwrite or "load_rules" not in st.session_state \
+                                        or st.session_state.load_rules.empty:
+                                    st.session_state.load_rules = _new_lr
+                                else:
+                                    st.session_state.load_rules = pd.concat(
+                                        [st.session_state.load_rules, _new_lr],
+                                        ignore_index=True
+                                    ).drop_duplicates(subset=["ID"], keep="last").reset_index(drop=True)
+                            st.success(f"✅ {len(df_p_xl)} yük yüklendi.")
+
+                        st.rerun()
+
+            st.markdown("---")
+            st.markdown("**📋 Desteklenen Kolon Başlıkları**")
+            _col_info = {
+                "Araçlar sayfası": "ID · Genişlik (cm) · Uzunluk (cm) · Yükseklik (cm) · Kapasite (kg) · Adet",
+                "Yükler sayfası (zorunlu)": "ID · Genişlik (cm) · Uzunluk (cm) · Yükseklik (cm) · Ağırlık (kg) · Adet",
+                "Yükler sayfası (isteğe bağlı)": "Şekil · Müşteri · Altına yerleştirilemez · Üstüne yerleştirilemez · Rotasyon · Min. Aralık (cm) · Öncelik",
+                "Türkçe/İngilizce eşdeğerleri": "genislik=Genişlik · agirlik=Ağırlık · musteri=Müşteri · rotation=Rotasyon",
+            }
+            for k, v in _col_info.items():
+                st.caption(f"**{k}:** {v}")
+
+        st.markdown("---")
+
+        # ═══════════════════════════════════════════════════════════════════════════
+        # YÜK LİSTESİ & YERLEŞTİRME KURALLARI — TEK KAYNAK
+        # Silinen satır kalıcı olarak kaldırılır, yeni yük eklenince geri gelmez.
+        # Algoritma yalnızca bu tablodaki parçaları kullanır.
+        # ═══════════════════════════════════════════════════════════════════════════
+        st.subheader("📋 Yük Listesi & Yerleştirme Kuralları")
+        st.caption("Bu tablo algoritmaya gönderilecek yük listesidir. "
+                   "Satır silin, adet/kural değiştirin — algoritma yalnızca bu tabloyu kullanır.")
+
+        if "deleted_ids" not in st.session_state:
+            st.session_state.deleted_ids = set()
+        if "geom_store" not in st.session_state:
+            st.session_state.geom_store = {}
+
+        def _sync_new_items():
+            """Kaynaklardaki yeni ID'leri load_rules'a ekle; silinmişleri atla."""
+            existing = set(st.session_state.get("load_rules", pd.DataFrame()).get("ID", []))
+            new_rows = []
+
+            for _, r in st.session_state.get("df_pallets", pd.DataFrame()).iterrows():
+                pid = str(r.get("ID", ""))
+                if not pid or pid in existing or pid in st.session_state.deleted_ids:
+                    continue
+                existing.add(pid)   # ← Bu render döngüsünde eklendi; tekrar ekleme
+                new_rows.append({
+                    "Kaynak": "Manuel", "ID": pid,
+                    "Şekil": str(r.get("Şekil", "Dikdörtgen")),
+                    "G(cm)": float(r.get("Genişlik (cm)", 0)),
+                    "U(cm)": float(r.get("Uzunluk (cm)", 0)),
+                    "Y(cm)": float(r.get("Yükseklik (cm)", 0)),
+                    "Adet": int(r.get("Adet", 1)),
+                    "Ağırlık(kg)": float(r.get("Ağırlık (kg)", 0)),
+                    "Müşteri": str(r.get("Müşteri", "")),
+                    "Altına yerleştirilemez": False,
+                    "Üstüne yerleştirilemez": False,
+                    "Rotasyon": True,  # Yük Listesi'nden yönetilir
+                    "Min. Aralık (cm)": 0,
+                    "Öncelik": int(r.get("Öncelik")) if r.get("Öncelik") is not None and str(r.get("Öncelik","")).strip() not in ("","nan","None") else None,
+                    # Hazır palet seçildiyse paletin dinamik yük kapasitesi
+                    # (palet_store'dan); elle girişte boş kalır.
+                    "İstif limiti (kg)": st.session_state.get("palet_store", {})
+                        .get(pid, {}).get("istif_limiti_kg"),
+                })
+
+            _sw_seen_in_sync = set()  # Bu sync döngüsünde görülen ID'ler
+            for sw in st.session_state.get("sw_shapes", []):
+                info = sw["info"]
+                pid  = info.name
+                # Duplicate ID'leri atla (aynı run içinde veya daha önce eklendiyse)
+                if pid in existing or pid in st.session_state.deleted_ids or pid in _sw_seen_in_sync:
+                    continue
+                _sw_seen_in_sync.add(pid)
+                existing.add(pid)   # ← Bu render döngüsünde eklendi; tekrar ekleme
+                qty = int(st.session_state.get(f"swq_{sw['name']}", sw.get("quantity", 1)))
+                wgt = float(st.session_state.get(f"sww_{sw['name']}", sw.get("weight", 0)))
+                st.session_state.geom_store[pid] = {
+                    "shape_type": info.shape_type, "cross_section": info.cross_section,
+                    "fill_ratio": info.fill_ratio, "mesh_vertices": info.mesh_vertices,
+                    "mesh_faces": info.mesh_faces, "source": "stl",
+                }
+                new_rows.append({
+                    "Kaynak": "STL/STEP", "ID": pid, "Şekil": _shape_label(info),
+                    "G(cm)": round(info.bbox_width, 1), "U(cm)": round(info.bbox_length, 1),
+                    "Y(cm)": round(info.bbox_height, 1), "Adet": qty,
+                    "Ağırlık(kg)": round(wgt, 2),
+                    "Müşteri": str(st.session_state.get(f"swc_{sw['name']}", "")),
+                    "Altına yerleştirilemez": False, "Üstüne yerleştirilemez": False, "Rotasyon": True,
+                    "Min. Aralık (cm)": 0, "Öncelik": None, "İstif limiti (kg)": None,
+                })
+
+            for pf in st.session_state.get("custom_profiles", []):
+                info = pf["info"]
+                pid  = pf["id"]
+                if pid in existing or pid in st.session_state.deleted_ids:
+                    continue
+                existing.add(pid)   # ← Bu render döngüsünde eklendi; tekrar ekleme
+                st.session_state.geom_store[pid] = {
+                    "shape_type": info.shape_type, "cross_section": info.cross_section,
+                    "fill_ratio": info.fill_ratio,
+                    "mesh_vertices": getattr(info, "mesh_vertices", None),
+                    "mesh_faces": getattr(info, "mesh_faces", None), "source": "profile",
+                    "inner_diameter": float(pf.get("t1", 0) or 0),
+                }
+                new_rows.append({
+                    "Kaynak": "Profil", "ID": pid, "Şekil": _shape_label(info),
+                    "G(cm)": round(info.bbox_width, 1), "U(cm)": round(info.bbox_length, 1),
+                    "Y(cm)": round(info.bbox_height, 1),
+                    "Adet": int(pf.get("quantity", 1)), "Ağırlık(kg)": float(pf.get("weight", 0)),
+                    "Müşteri": str(pf.get("customer", "")),
+                    "Altına yerleştirilemez": False, "Üstüne yerleştirilemez": False, "Rotasyon": True,
+                    "Min. Aralık (cm)": 0, "Öncelik": None,
+                })
+
+            if new_rows:
+                new_df = pd.DataFrame(new_rows)
+                if "load_rules" not in st.session_state or st.session_state.load_rules.empty:
+                    st.session_state.load_rules = new_df
+                else:
+                    st.session_state.load_rules = pd.concat(
+                        [st.session_state.load_rules, new_df], ignore_index=True)
+
+        _sync_new_items()
+
+        # ── Eski oturumlardan kalan t1/t2 sütunlarını tablodan tamamen kaldır ────
+        for _df_key in ("load_rules", "load_rules_live"):
+            _df_ref = st.session_state.get(_df_key)
+            if _df_ref is not None and not _df_ref.empty:
+                _drop = [c for c in ("t1(cm)", "t2(cm)") if c in _df_ref.columns]
+                if _drop:
+                    st.session_state[_df_key] = _df_ref.drop(columns=_drop)
+
+        # ── _sync_new_items tarafından load_rules'a eklenen yeni satırları
+        #    load_rules_live'a da ekle (algoritma her zaman live'ı kullanır)
+        if "load_rules_live" in st.session_state and "load_rules" in st.session_state:
+            if not st.session_state.load_rules.empty:
+                _live_ids = (
+                    set(st.session_state.load_rules_live["ID"].dropna().astype(str).tolist())
+                    if not st.session_state.load_rules_live.empty else set()
+                )
+                _newly_in_base = st.session_state.load_rules[
+                    ~st.session_state.load_rules["ID"].astype(str).isin(_live_ids)
+                ]
+                if not _newly_in_base.empty:
+                    st.session_state.load_rules_live = pd.concat(
+                        [st.session_state.load_rules_live, _newly_in_base],
+                        ignore_index=True,
+                    )
+
+        # ── Çift yönlü senkronizasyon: load_rules → sw_shapes + staging ─────────
+        if "load_rules" in st.session_state and not st.session_state.load_rules.empty:
+            lr = st.session_state.load_rules
+            _lr_stl = lr[lr["Kaynak"] == "STL/STEP"] if "Kaynak" in lr.columns else pd.DataFrame()
+            if not _lr_stl.empty:
+                # sw_shapes güncelle
+                for _sw in st.session_state.get("sw_shapes", []):
+                    _pid = _sw["info"].name
+                    _mask = _lr_stl["ID"] == _pid
+                    if _mask.any():
+                        _lr_row = _lr_stl[_mask].iloc[0]
+                        _new_qty = int(_lr_row.get("Adet", _sw["quantity"]))
+                        _new_wgt = float(_lr_row.get("Ağırlık(kg)", _sw["weight"]))
+                        _new_cst = str(_lr_row.get("Müşteri", _sw["customer"]))
+                        st.session_state[f"swq_{_pid}"] = _new_qty
+                        st.session_state[f"sww_{_pid}"] = _new_wgt
+                        st.session_state[f"swc_{_pid}"] = _new_cst
+                        _sw["quantity"] = _new_qty
+                        _sw["weight"]   = _new_wgt
+                        _sw["customer"] = _new_cst
+                # Staging'deki parçaları da güncelle (henüz eklenmemiş bekleyenler)
+                _lr_all = lr if not lr.empty else pd.DataFrame()
+                for _s in st.session_state.get("sw_staging", []):
+                    _pid = _s["name"]
+                    _mask2 = _lr_all["ID"] == _pid if "ID" in _lr_all.columns else pd.Series(dtype=bool)
+                    if not _mask2.empty and _mask2.any():
+                        _lr_row2 = _lr_all[_mask2].iloc[0]
+                        _s["quantity"] = int(_lr_row2.get("Adet", _s["quantity"]))
+                        _s["weight"]   = float(_lr_row2.get("Ağırlık(kg)", _s["weight"]))
+                        _s["customer"] = str(_lr_row2.get("Müşteri", _s["customer"]))
+
+        # load_rules_live yoksa base'den kopyala (ilk açılış / sıfırlama sonrası)
+        if "load_rules_live" not in st.session_state and "load_rules" in st.session_state:
+            st.session_state.load_rules_live = st.session_state.load_rules.copy()
+
+        # ── Fragment: tablo düzenlenirken sadece bu bölüm yeniden çalışır ────────
+        def _load_rules_editor_ui():
+            if st.session_state.get("load_rules") is None or st.session_state.load_rules.empty:
+                st.info("Henüz yük tanımlanmamış. Yukarıdaki sekmelerden yük ekleyin.")
+                return
+
+            prev_ids = set(st.session_state.load_rules["ID"].tolist())
+
+            # Eski oturumlarda/kayıtlarda bu sütun olmayabilir → eklenir (boş).
+            if "İstif limiti (kg)" not in st.session_state.load_rules.columns:
+                st.session_state.load_rules["İstif limiti (kg)"] = None
+
+            edited = st.data_editor(
+                st.session_state.load_rules,
                 width="stretch",
                 hide_index=True,
                 num_rows="dynamic",
-                disabled=["ID","Dosya","G(cm)","U(cm)","Y(cm)"],
+                disabled=["Kaynak"],
                 column_config={
-                    "ID":          st.column_config.TextColumn("🏷️ ID"),
-                    "Dosya":       st.column_config.TextColumn("📂 Dosya"),
-                    "G(cm)":       st.column_config.NumberColumn("G(cm)", format="%.1f"),
-                    "U(cm)":       st.column_config.NumberColumn("U(cm)", format="%.1f"),
-                    "Y(cm)":       st.column_config.NumberColumn("Y(cm)", format="%.1f"),
-                    "Adet":        st.column_config.NumberColumn("Adet", min_value=0),
-                    "Ağırlık(kg)": st.column_config.NumberColumn("⚖️ Ağırlık(kg)", format="%.2f"),
-                    "Müşteri":     st.column_config.TextColumn("👤 Müşteri"),
+                    "Kaynak":    st.column_config.TextColumn("📂 Kaynak", width="small"),
+                    "ID":        st.column_config.TextColumn("🏷️ ID", required=True),
+                    "Şekil":     st.column_config.SelectboxColumn("📐 Şekil",
+                                     options=["Dikdörtgen","Silindir"],
+                                     required=True),
+                    "G(cm)":     st.column_config.NumberColumn("G(cm)", format="%.1f", min_value=1),
+                    "U(cm)":     st.column_config.NumberColumn("U(cm)", format="%.1f", min_value=1),
+                    "Y(cm)":     st.column_config.NumberColumn("Y(cm)", format="%.1f", min_value=1),
+                    "Adet":      st.column_config.NumberColumn("Adet", width="small", min_value=0),
+                    "Ağırlık(kg)": st.column_config.NumberColumn("⚖️ Ağırlık(kg)", format="%.1f", min_value=0),
+                    "Müşteri":   st.column_config.TextColumn("👤 Müşteri"),
+                    "Altına yerleştirilemez": st.column_config.CheckboxColumn(
+                        "🚫 Altına yük konmasın",
+                        help="Bu yükün altına başka yük yerleştirilemez (zemine oturur)"),
+                    "Üstüne yerleştirilemez": st.column_config.CheckboxColumn(
+                        "⛔ Üstüne yük konmasın",
+                        help="Bu yük kırılgan/hassas — üstüne hiçbir yük yerleştirilemez"),
+                    "Rotasyon":  st.column_config.CheckboxColumn(
+                        "🔄 Rotasyon", help="Yük XY düzleminde döndürülebilir"),
+                    "Min. Aralık (cm)": st.column_config.NumberColumn(
+                        "↔️ Min. Aralık (cm)",
+                        min_value=0, max_value=100, step=1, default=0,
+                        help="Bu parçanın çevresinde bırakılacak minimum boşluk (cm)."),
+                    "Öncelik": st.column_config.NumberColumn(
+                        "🚚 Öncelik", min_value=1, step=1,
+                        help="Teslimat önceliği: 1 = kapıya en yakın. Boş = önceliksiz."),
+                    "İstif limiti (kg)": st.column_config.NumberColumn(
+                        "🏋️ İstif limiti (kg)", min_value=0, step=50,
+                        help="Bu yükün ÜSTÜNE konabilecek azami ağırlık. Hazır "
+                             "palet seçildiğinde paletin dinamik yük kapasitesi "
+                             "yazılır (EUR: 1500 kg). Boş = varsayılan 1000 kg."),
                 },
-                key="sw_shapes_editor",
+                key="load_rules_editor",
             )
 
-            # ── Duplicate ID kontrolü (eski girdileri otomatik temizle) ────────
-            if "ID" in sw_edited.columns:
-                dup_mask = sw_edited["ID"].duplicated(keep="first")
-                if dup_mask.any():
-                    sw_edited = sw_edited[~dup_mask].reset_index(drop=True)
-                    st.session_state.sw_shapes = [
-                        s for s in st.session_state.sw_shapes
-                        if s["name"] in set(sw_edited["ID"].tolist())
-                    ]
-                    st.warning("⚠️ Duplicate ID'ler temizlendi. Lütfen aynı dosyayı tekrar ekleyin.")
+            # Yeni satırlarda Kaynak boşsa "Manuel" yaz
+            if not edited.empty and "Kaynak" in edited.columns:
+                edited["Kaynak"] = edited["Kaynak"].fillna("Manuel").replace("", "Manuel")
 
-            # Değişiklikleri sw_shapes ve load_rules'a yansıt
-            curr_sw_ids = set(sw_edited["ID"].tolist()) if not sw_edited.empty else set()
-            prev_sw_ids = {s["name"] for s in st.session_state.sw_shapes}
-            deleted_sw  = prev_sw_ids - curr_sw_ids
-            if deleted_sw:
-                st.session_state.sw_shapes = [
-                    s for s in st.session_state.sw_shapes
-                    if s["name"] not in deleted_sw
-                ]
-                st.session_state.deleted_ids |= deleted_sw
-                if "load_rules" in st.session_state and not st.session_state.load_rules.empty:
-                    st.session_state.load_rules = st.session_state.load_rules[
-                        ~st.session_state.load_rules["ID"].isin(deleted_sw)
+            # ── Silinen satırları işle (sadece silinme varsa base güncellenir) ──
+            curr_ids = set(edited["ID"].dropna().astype(str).tolist()) if not edited.empty else set()
+            newly_deleted = prev_ids - curr_ids
+            if newly_deleted:
+                st.session_state.deleted_ids |= newly_deleted
+                if "df_pallets" in st.session_state:
+                    st.session_state.df_pallets = st.session_state.df_pallets[
+                        ~st.session_state.df_pallets["ID"].isin(newly_deleted)
                     ].reset_index(drop=True)
-                st.rerun()
-
-            if not sw_edited.empty:
-                for _, row in sw_edited.iterrows():
-                    pid = str(row["ID"])
-                    new_qty = int(row.get("Adet", 1))
-                    new_wgt = float(row.get("Ağırlık(kg)", 0))
-                    new_cst = str(row.get("Müşteri", ""))
-                    # Session state key güncelle
-                    st.session_state[f"swq_{pid}"] = new_qty
-                    st.session_state[f"sww_{pid}"] = new_wgt
-                    st.session_state[f"swc_{pid}"] = new_cst
-                    # sw_shapes güncelle
-                    for _sw in st.session_state.get("sw_shapes", []):
-                        if _sw["name"] == pid:
-                            _sw["quantity"] = new_qty
-                            _sw["weight"]   = new_wgt
-                            _sw["customer"] = new_cst
-                    # load_rules senkronizasyonu
-                    if "load_rules" in st.session_state and not st.session_state.load_rules.empty:
-                        mask = st.session_state.load_rules["ID"] == pid
-                        if mask.any():
-                            st.session_state.load_rules.loc[mask, "Adet"]        = new_qty
-                            st.session_state.load_rules.loc[mask, "Ağırlık(kg)"] = new_wgt
-                            st.session_state.load_rules.loc[mask, "Müşteri"]     = new_cst
-                    # staging'de bekleyen varsa güncelle
-                    for _s in st.session_state.get("sw_staging", []):
-                        if _s["name"] == pid:
-                            _s["quantity"] = new_qty
-                            _s["weight"]   = new_wgt
-                            _s["customer"] = new_cst
-
-            if st.button("🗑️ Tüm SW Parçalarını Temizle"):
-                st.session_state.sw_shapes  = []
-                st.session_state.sw_staging = []
-                st.session_state.pop("_sw_processed_run", None)
-                st.rerun()
-
-    # ── Excel İçe Aktarım ────────────────────────────────────────────────────
-    with t_xl:
-        st.markdown("#### 📊 Excel'den Araç ve Yük Verisi İçe Aktar")
-
-        col_dl, col_up = st.columns([1, 2])
-        with col_dl:
-            st.markdown("**Excel Şablonu**")
-            st.caption("Uygun kolon başlıklarına sahip hazır şablon:")
-            import os as _os
-            _tpl_search = [
-                "loadplan_template.xlsx",
-                _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
-                              "loadplan_template.xlsx"),
-                _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
-                              "..", "loadplan_template.xlsx"),
-            ]
-            _tpl_bytes = None
-            for _p in _tpl_search:
-                try:
-                    with open(_p, "rb") as _tf:
-                        _tpl_bytes = _tf.read()
-                    break
-                except FileNotFoundError:
-                    continue
-            if _tpl_bytes:
-                st.download_button(
-                    "⬇ Boş Şablonu İndir",
-                    data=_tpl_bytes,
-                    file_name="loadplan_template.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    width="stretch",
-                    type="primary",
-                )
-            else:
-                st.caption("loadplan_template.xlsx bulunamadı.")
-
-        with col_up:
-            st.markdown("**2. Doldurulmuş Dosyayı Yükle**")
-            st.caption("Şablonu doldurup yükleyin — Araçlar ve Yükler sayfaları otomatik okunur:")
-            xl_file = st.file_uploader(
-                "Excel dosyası seç",
-                type=["xlsx", "xls"],
-                key="xl_import_uploader",
-                label_visibility="collapsed",
-            )
-
-        if xl_file is not None:
-            xl_bytes = xl_file.read()
-            with st.spinner("Excel okunuyor…"):
-                df_t_xl, df_p_xl, xl_errors = import_excel(xl_bytes)
-
-            if xl_errors:
-                for err in xl_errors:
-                    st.error(f"❌ {err}")
-
-            # Araçlar önizleme
-            if df_t_xl is not None and not df_t_xl.empty:
-                st.markdown(f"**🚛 Araçlar** — {len(df_t_xl)} satır okundu")
-                st.dataframe(df_t_xl, hide_index=True, width="stretch")
-            elif not xl_errors:
-                st.warning("Araçlar sayfası bulunamadı veya veri yok.")
-
-            # Yükler önizleme
-            if df_p_xl is not None and not df_p_xl.empty:
-                st.markdown(f"**📦 Yükler** — {len(df_p_xl)} satır okundu")
-                st.dataframe(df_p_xl, hide_index=True, width="stretch",
-                    column_config={
-                        "Altına yerleştirilemez": st.column_config.CheckboxColumn("🚫 Altına"),
-                        "Üstüne yerleştirilemez": st.column_config.CheckboxColumn("⛔ Üstüne"),
-                        "Rotasyon":               st.column_config.CheckboxColumn("🔄 Rot."),
-                        "Min. Aralık (cm)":       st.column_config.NumberColumn(
-                            "↔️ Min. Aralık", width="small"),
-                        "Öncelik":                st.column_config.NumberColumn(
-                            "🚚 Öncelik", width="small",
-                            help="0/boş = normal · 1 = kapıya en yakın"),
-                    })
-            elif not xl_errors:
-                st.warning("Yükler sayfası bulunamadı veya veri yok.")
-
-            # Uygula butonu
-            if (df_t_xl is not None or df_p_xl is not None) and not xl_errors:
-                _xl_mode = st.radio(
-                    "Mevcut verilerle ne yapılsın?",
-                    ["🔄 Üzerine yaz (mevcut verileri sil)", "➕ Mevcut veriye ekle"],
-                    horizontal=True, key="xl_import_mode",
-                )
-                if st.button("✅ İçe Aktarımı Uygula", type="primary", width="stretch"):
-                    _overwrite = "Üzerine yaz" in _xl_mode
-
-                    # Araçlar
-                    if df_t_xl is not None and not df_t_xl.empty:
-                        if _overwrite:
-                            st.session_state.df_trucks = df_t_xl.copy()
-                        else:
-                            existing_t = st.session_state.get("df_trucks", pd.DataFrame())
-                            st.session_state.df_trucks = pd.concat(
-                                [existing_t, df_t_xl], ignore_index=True
-                            ).drop_duplicates(subset=["ID"], keep="last").reset_index(drop=True)
-                        # Araç tablosu base'i değişti → editör delta'ları artık
-                        # geçersiz; key'i ve live kopyayı temizle (yanlış hizalama önlenir)
-                        st.session_state.pop("df_trucks_editor", None)
-                        st.session_state.pop("df_trucks_live", None)
-                        st.success(f"✅ {len(df_t_xl)} araç yüklendi.")
-
-                    # Yükler
-                    if df_p_xl is not None and not df_p_xl.empty:
-                        # df_pallets güncelle
-                        _pal_cols = ["ID", "Şekil", "Genişlik (cm)", "Uzunluk (cm)",
-                                     "Yükseklik (cm)", "Ağırlık (kg)", "Adet", "Müşteri",
-                                     "Öncelik"]
-                        # Öncelik sütunu yoksa boş oluştur (geriye dönük uyumluluk)
-                        for _c in _pal_cols:
-                            if _c not in df_p_xl.columns:
-                                df_p_xl[_c] = None
-                        _df_pal_new = df_p_xl[_pal_cols].copy()
-                        _df_pal_new = _df_pal_new.rename(columns={
-                            "Ağırlık (kg)": "Ağırlık (kg)",
-                        })
-                        if _overwrite:
-                            st.session_state.df_pallets = _df_pal_new
-                            # Yük listesini de sıfırla
-                            st.session_state.pop("load_rules", None)
-                            st.session_state.pop("deleted_ids", None)
-                        else:
-                            existing_p = st.session_state.get("df_pallets", pd.DataFrame())
-                            st.session_state.df_pallets = pd.concat(
-                                [existing_p, _df_pal_new], ignore_index=True
-                            ).drop_duplicates(subset=["ID"], keep="last").reset_index(drop=True)
-
-                        # load_rules'a doğrudan ekle (kural sütunlarıyla)
-                        _lr_rows = []
-                        _existing_lr_ids = set(
-                            st.session_state.get("load_rules", pd.DataFrame()).get("ID", [])
-                            if "load_rules" in st.session_state else []
-                        )
-                        for _, _row in df_p_xl.iterrows():
-                            _pid = str(_row["ID"])
-                            if not _overwrite and _pid in _existing_lr_ids:
-                                continue
-                            _lr_rows.append({
-                                "Kaynak": "Excel",
-                                "ID": _pid,
-                                "Şekil": _row.get("Şekil", "Dikdörtgen"),
-                                "G(cm)": float(_row.get("Genişlik (cm)", 0)),
-                                "U(cm)": float(_row.get("Uzunluk (cm)", 0)),
-                                "Y(cm)": float(_row.get("Yükseklik (cm)", 0)),
-                                "Adet": int(_row.get("Adet", 1)),
-                                "Ağırlık(kg)": float(_row.get("Ağırlık (kg)", 0)),
-                                "Müşteri": str(_row.get("Müşteri", "")),
-                                "Altına yerleştirilemez": bool(_row.get("Altına yerleştirilemez", False)),
-                                "Üstüne yerleştirilemez": bool(_row.get("Üstüne yerleştirilemez", False)),
-                                "Rotasyon": bool(_row.get("Rotasyon", True)),
-                                "Min. Aralık (cm)": int(_row.get("Min. Aralık (cm)", 0)),
-                                "Öncelik": int(_row["Öncelik"]) if "Öncelik" in _row and str(_row.get("Öncelik","")).strip() not in ("","nan","None") else None,
-                            })
-                        if _lr_rows:
-                            _new_lr = pd.DataFrame(_lr_rows)
-                            if _overwrite or "load_rules" not in st.session_state \
-                                    or st.session_state.load_rules.empty:
-                                st.session_state.load_rules = _new_lr
-                            else:
-                                st.session_state.load_rules = pd.concat(
-                                    [st.session_state.load_rules, _new_lr],
-                                    ignore_index=True
-                                ).drop_duplicates(subset=["ID"], keep="last").reset_index(drop=True)
-                        st.success(f"✅ {len(df_p_xl)} yük yüklendi.")
-
-                    st.rerun()
-
-        st.markdown("---")
-        st.markdown("**📋 Desteklenen Kolon Başlıkları**")
-        _col_info = {
-            "Araçlar sayfası": "ID · Genişlik (cm) · Uzunluk (cm) · Yükseklik (cm) · Kapasite (kg) · Adet",
-            "Yükler sayfası (zorunlu)": "ID · Genişlik (cm) · Uzunluk (cm) · Yükseklik (cm) · Ağırlık (kg) · Adet",
-            "Yükler sayfası (isteğe bağlı)": "Şekil · Müşteri · Altına yerleştirilemez · Üstüne yerleştirilemez · Rotasyon · Min. Aralık (cm) · Öncelik",
-            "Türkçe/İngilizce eşdeğerleri": "genislik=Genişlik · agirlik=Ağırlık · musteri=Müşteri · rotation=Rotasyon",
-        }
-        for k, v in _col_info.items():
-            st.caption(f"**{k}:** {v}")
-
-    st.markdown("---")
-
-    # ═══════════════════════════════════════════════════════════════════════════
-    # YÜK LİSTESİ & YERLEŞTİRME KURALLARI — TEK KAYNAK
-    # Silinen satır kalıcı olarak kaldırılır, yeni yük eklenince geri gelmez.
-    # Algoritma yalnızca bu tablodaki parçaları kullanır.
-    # ═══════════════════════════════════════════════════════════════════════════
-    # ── Hangi filo kullanılıyor? (ana ekranda da görünsün) ───────────────
-    from filo_secimi import aktif_filo as _aktif_filo
-    _ana_ck, _ana_dr = _aktif_filo()
-    if _ana_ck and _ana_dr:
-        _ana_plakalar = ", ".join(d.plaka for d in _ana_dr[:4])
-        if len(_ana_dr) > 4:
-            _ana_plakalar += f" (+{len(_ana_dr) - 4})"
-        st.info(
-            f"🚚 **Çekici + dorse filosu kullanılıyor** — {len(_ana_ck)} çekici, "
-            f"{len(_ana_dr)} dorse ({_ana_plakalar}). Kütle kapasitesi KTY "
-            f"md.128'den hesaplanıyor; her yerleştirmede dingil yükü "
-            f"kontrol ediliyor. Değiştirmek için → 🚚 Filo sayfası."
-        )
-    else:
-        st.caption("🚛 Kenar çubuğundaki araç tablosu kullanılıyor. "
-                   "Çekici/dorse ayrımı, mevzuat kapasitesi ve dingil "
-                   "kontrolü için → 🚚 Filo sayfası.")
-
-    st.subheader("📋 Yük Listesi & Yerleştirme Kuralları")
-    st.caption("Bu tablo algoritmaya gönderilecek yük listesidir. "
-               "Satır silin, adet/kural değiştirin — algoritma yalnızca bu tabloyu kullanır.")
-
-    if "deleted_ids" not in st.session_state:
-        st.session_state.deleted_ids = set()
-    if "geom_store" not in st.session_state:
-        st.session_state.geom_store = {}
-
-    def _sync_new_items():
-        """Kaynaklardaki yeni ID'leri load_rules'a ekle; silinmişleri atla."""
-        existing = set(st.session_state.get("load_rules", pd.DataFrame()).get("ID", []))
-        new_rows = []
-
-        for _, r in st.session_state.get("df_pallets", pd.DataFrame()).iterrows():
-            pid = str(r.get("ID", ""))
-            if not pid or pid in existing or pid in st.session_state.deleted_ids:
-                continue
-            existing.add(pid)   # ← Bu render döngüsünde eklendi; tekrar ekleme
-            new_rows.append({
-                "Kaynak": "Manuel", "ID": pid,
-                "Şekil": str(r.get("Şekil", "Dikdörtgen")),
-                "G(cm)": float(r.get("Genişlik (cm)", 0)),
-                "U(cm)": float(r.get("Uzunluk (cm)", 0)),
-                "Y(cm)": float(r.get("Yükseklik (cm)", 0)),
-                "Adet": int(r.get("Adet", 1)),
-                "Ağırlık(kg)": float(r.get("Ağırlık (kg)", 0)),
-                "Müşteri": str(r.get("Müşteri", "")),
-                "Altına yerleştirilemez": False,
-                "Üstüne yerleştirilemez": False,
-                "Rotasyon": True,  # Yük Listesi'nden yönetilir
-                "Min. Aralık (cm)": 0,
-                "Öncelik": int(r.get("Öncelik")) if r.get("Öncelik") is not None and str(r.get("Öncelik","")).strip() not in ("","nan","None") else None,
-                # Hazır palet seçildiyse paletin dinamik yük kapasitesi
-                # (palet_store'dan); elle girişte boş kalır.
-                "İstif limiti (kg)": st.session_state.get("palet_store", {})
-                    .get(pid, {}).get("istif_limiti_kg"),
-            })
-
-        _sw_seen_in_sync = set()  # Bu sync döngüsünde görülen ID'ler
-        for sw in st.session_state.get("sw_shapes", []):
-            info = sw["info"]
-            pid  = info.name
-            # Duplicate ID'leri atla (aynı run içinde veya daha önce eklendiyse)
-            if pid in existing or pid in st.session_state.deleted_ids or pid in _sw_seen_in_sync:
-                continue
-            _sw_seen_in_sync.add(pid)
-            existing.add(pid)   # ← Bu render döngüsünde eklendi; tekrar ekleme
-            qty = int(st.session_state.get(f"swq_{sw['name']}", sw.get("quantity", 1)))
-            wgt = float(st.session_state.get(f"sww_{sw['name']}", sw.get("weight", 0)))
-            st.session_state.geom_store[pid] = {
-                "shape_type": info.shape_type, "cross_section": info.cross_section,
-                "fill_ratio": info.fill_ratio, "mesh_vertices": info.mesh_vertices,
-                "mesh_faces": info.mesh_faces, "source": "stl",
-            }
-            new_rows.append({
-                "Kaynak": "STL/STEP", "ID": pid, "Şekil": _shape_label(info),
-                "G(cm)": round(info.bbox_width, 1), "U(cm)": round(info.bbox_length, 1),
-                "Y(cm)": round(info.bbox_height, 1), "Adet": qty,
-                "Ağırlık(kg)": round(wgt, 2),
-                "Müşteri": str(st.session_state.get(f"swc_{sw['name']}", "")),
-                "Altına yerleştirilemez": False, "Üstüne yerleştirilemez": False, "Rotasyon": True,
-                "Min. Aralık (cm)": 0, "Öncelik": None, "İstif limiti (kg)": None,
-            })
-
-        for pf in st.session_state.get("custom_profiles", []):
-            info = pf["info"]
-            pid  = pf["id"]
-            if pid in existing or pid in st.session_state.deleted_ids:
-                continue
-            existing.add(pid)   # ← Bu render döngüsünde eklendi; tekrar ekleme
-            st.session_state.geom_store[pid] = {
-                "shape_type": info.shape_type, "cross_section": info.cross_section,
-                "fill_ratio": info.fill_ratio,
-                "mesh_vertices": getattr(info, "mesh_vertices", None),
-                "mesh_faces": getattr(info, "mesh_faces", None), "source": "profile",
-                "inner_diameter": float(pf.get("t1", 0) or 0),
-            }
-            new_rows.append({
-                "Kaynak": "Profil", "ID": pid, "Şekil": _shape_label(info),
-                "G(cm)": round(info.bbox_width, 1), "U(cm)": round(info.bbox_length, 1),
-                "Y(cm)": round(info.bbox_height, 1),
-                "Adet": int(pf.get("quantity", 1)), "Ağırlık(kg)": float(pf.get("weight", 0)),
-                "Müşteri": str(pf.get("customer", "")),
-                "Altına yerleştirilemez": False, "Üstüne yerleştirilemez": False, "Rotasyon": True,
-                "Min. Aralık (cm)": 0, "Öncelik": None,
-            })
-
-        if new_rows:
-            new_df = pd.DataFrame(new_rows)
-            if "load_rules" not in st.session_state or st.session_state.load_rules.empty:
-                st.session_state.load_rules = new_df
-            else:
-                st.session_state.load_rules = pd.concat(
-                    [st.session_state.load_rules, new_df], ignore_index=True)
-
-    _sync_new_items()
-
-    # ── Eski oturumlardan kalan t1/t2 sütunlarını tablodan tamamen kaldır ────
-    for _df_key in ("load_rules", "load_rules_live"):
-        _df_ref = st.session_state.get(_df_key)
-        if _df_ref is not None and not _df_ref.empty:
-            _drop = [c for c in ("t1(cm)", "t2(cm)") if c in _df_ref.columns]
-            if _drop:
-                st.session_state[_df_key] = _df_ref.drop(columns=_drop)
-
-    # ── _sync_new_items tarafından load_rules'a eklenen yeni satırları
-    #    load_rules_live'a da ekle (algoritma her zaman live'ı kullanır)
-    if "load_rules_live" in st.session_state and "load_rules" in st.session_state:
-        if not st.session_state.load_rules.empty:
-            _live_ids = (
-                set(st.session_state.load_rules_live["ID"].dropna().astype(str).tolist())
-                if not st.session_state.load_rules_live.empty else set()
-            )
-            _newly_in_base = st.session_state.load_rules[
-                ~st.session_state.load_rules["ID"].astype(str).isin(_live_ids)
-            ]
-            if not _newly_in_base.empty:
-                st.session_state.load_rules_live = pd.concat(
-                    [st.session_state.load_rules_live, _newly_in_base],
-                    ignore_index=True,
-                )
-
-    # ── Çift yönlü senkronizasyon: load_rules → sw_shapes + staging ─────────
-    if "load_rules" in st.session_state and not st.session_state.load_rules.empty:
-        lr = st.session_state.load_rules
-        _lr_stl = lr[lr["Kaynak"] == "STL/STEP"] if "Kaynak" in lr.columns else pd.DataFrame()
-        if not _lr_stl.empty:
-            # sw_shapes güncelle
-            for _sw in st.session_state.get("sw_shapes", []):
-                _pid = _sw["info"].name
-                _mask = _lr_stl["ID"] == _pid
-                if _mask.any():
-                    _lr_row = _lr_stl[_mask].iloc[0]
-                    _new_qty = int(_lr_row.get("Adet", _sw["quantity"]))
-                    _new_wgt = float(_lr_row.get("Ağırlık(kg)", _sw["weight"]))
-                    _new_cst = str(_lr_row.get("Müşteri", _sw["customer"]))
-                    st.session_state[f"swq_{_pid}"] = _new_qty
-                    st.session_state[f"sww_{_pid}"] = _new_wgt
-                    st.session_state[f"swc_{_pid}"] = _new_cst
-                    _sw["quantity"] = _new_qty
-                    _sw["weight"]   = _new_wgt
-                    _sw["customer"] = _new_cst
-            # Staging'deki parçaları da güncelle (henüz eklenmemiş bekleyenler)
-            _lr_all = lr if not lr.empty else pd.DataFrame()
-            for _s in st.session_state.get("sw_staging", []):
-                _pid = _s["name"]
-                _mask2 = _lr_all["ID"] == _pid if "ID" in _lr_all.columns else pd.Series(dtype=bool)
-                if not _mask2.empty and _mask2.any():
-                    _lr_row2 = _lr_all[_mask2].iloc[0]
-                    _s["quantity"] = int(_lr_row2.get("Adet", _s["quantity"]))
-                    _s["weight"]   = float(_lr_row2.get("Ağırlık(kg)", _s["weight"]))
-                    _s["customer"] = str(_lr_row2.get("Müşteri", _s["customer"]))
-
-    # load_rules_live yoksa base'den kopyala (ilk açılış / sıfırlama sonrası)
-    if "load_rules_live" not in st.session_state and "load_rules" in st.session_state:
-        st.session_state.load_rules_live = st.session_state.load_rules.copy()
-
-    # ── Fragment: tablo düzenlenirken sadece bu bölüm yeniden çalışır ────────
-    def _load_rules_editor_ui():
-        if st.session_state.get("load_rules") is None or st.session_state.load_rules.empty:
-            st.info("Henüz yük tanımlanmamış. Yukarıdaki sekmelerden yük ekleyin.")
-            return
-
-        prev_ids = set(st.session_state.load_rules["ID"].tolist())
-
-        # Eski oturumlarda/kayıtlarda bu sütun olmayabilir → eklenir (boş).
-        if "İstif limiti (kg)" not in st.session_state.load_rules.columns:
-            st.session_state.load_rules["İstif limiti (kg)"] = None
-
-        edited = st.data_editor(
-            st.session_state.load_rules,
-            width="stretch",
-            hide_index=True,
-            num_rows="dynamic",
-            disabled=["Kaynak"],
-            column_config={
-                "Kaynak":    st.column_config.TextColumn("📂 Kaynak", width="small"),
-                "ID":        st.column_config.TextColumn("🏷️ ID", required=True),
-                "Şekil":     st.column_config.SelectboxColumn("📐 Şekil",
-                                 options=["Dikdörtgen","Silindir"],
-                                 required=True),
-                "G(cm)":     st.column_config.NumberColumn("G(cm)", format="%.1f", min_value=1),
-                "U(cm)":     st.column_config.NumberColumn("U(cm)", format="%.1f", min_value=1),
-                "Y(cm)":     st.column_config.NumberColumn("Y(cm)", format="%.1f", min_value=1),
-                "Adet":      st.column_config.NumberColumn("Adet", width="small", min_value=0),
-                "Ağırlık(kg)": st.column_config.NumberColumn("⚖️ Ağırlık(kg)", format="%.1f", min_value=0),
-                "Müşteri":   st.column_config.TextColumn("👤 Müşteri"),
-                "Altına yerleştirilemez": st.column_config.CheckboxColumn(
-                    "🚫 Altına yük konmasın",
-                    help="Bu yükün altına başka yük yerleştirilemez (zemine oturur)"),
-                "Üstüne yerleştirilemez": st.column_config.CheckboxColumn(
-                    "⛔ Üstüne yük konmasın",
-                    help="Bu yük kırılgan/hassas — üstüne hiçbir yük yerleştirilemez"),
-                "Rotasyon":  st.column_config.CheckboxColumn(
-                    "🔄 Rotasyon", help="Yük XY düzleminde döndürülebilir"),
-                "Min. Aralık (cm)": st.column_config.NumberColumn(
-                    "↔️ Min. Aralık (cm)",
-                    min_value=0, max_value=100, step=1, default=0,
-                    help="Bu parçanın çevresinde bırakılacak minimum boşluk (cm)."),
-                "Öncelik": st.column_config.NumberColumn(
-                    "🚚 Öncelik", min_value=1, step=1,
-                    help="Teslimat önceliği: 1 = kapıya en yakın. Boş = önceliksiz."),
-                "İstif limiti (kg)": st.column_config.NumberColumn(
-                    "🏋️ İstif limiti (kg)", min_value=0, step=50,
-                    help="Bu yükün ÜSTÜNE konabilecek azami ağırlık. Hazır "
-                         "palet seçildiğinde paletin dinamik yük kapasitesi "
-                         "yazılır (EUR: 1500 kg). Boş = varsayılan 1000 kg."),
-            },
-            key="load_rules_editor",
-        )
-
-        # Yeni satırlarda Kaynak boşsa "Manuel" yaz
-        if not edited.empty and "Kaynak" in edited.columns:
-            edited["Kaynak"] = edited["Kaynak"].fillna("Manuel").replace("", "Manuel")
-
-        # ── Silinen satırları işle (sadece silinme varsa base güncellenir) ──
-        curr_ids = set(edited["ID"].dropna().astype(str).tolist()) if not edited.empty else set()
-        newly_deleted = prev_ids - curr_ids
-        if newly_deleted:
-            st.session_state.deleted_ids |= newly_deleted
-            if "df_pallets" in st.session_state:
-                st.session_state.df_pallets = st.session_state.df_pallets[
-                    ~st.session_state.df_pallets["ID"].isin(newly_deleted)
+                st.session_state.sw_shapes = [
+                    s for s in st.session_state.get("sw_shapes", [])
+                    if s["info"].name not in newly_deleted
+                ]
+                st.session_state.custom_profiles = [
+                    p for p in st.session_state.get("custom_profiles", [])
+                    if p["id"] not in newly_deleted
+                ]
+                for did in newly_deleted:
+                    st.session_state.geom_store.pop(did, None)
+                # Silinen satırları base'den de çıkar — widget zaten silindi gösteriyor
+                st.session_state.load_rules = st.session_state.load_rules[
+                    ~st.session_state.load_rules["ID"].isin(newly_deleted)
                 ].reset_index(drop=True)
-            st.session_state.sw_shapes = [
-                s for s in st.session_state.get("sw_shapes", [])
-                if s["info"].name not in newly_deleted
-            ]
-            st.session_state.custom_profiles = [
-                p for p in st.session_state.get("custom_profiles", [])
-                if p["id"] not in newly_deleted
-            ]
-            for did in newly_deleted:
-                st.session_state.geom_store.pop(did, None)
-            # Silinen satırları base'den de çıkar — widget zaten silindi gösteriyor
-            st.session_state.load_rules = st.session_state.load_rules[
-                ~st.session_state.load_rules["ID"].isin(newly_deleted)
-            ].reset_index(drop=True)
 
-        # ── KRİTİK: load_rules_live = mevcut tablo durumu (base güncellenmez!) ──
-        # load_rules (base) asla inline düzenlemeden güncellenmez;
-        # aksi hâlde st.data_editor widget'ı sıfırlanır ve yazılan veri silinir.
-        # Algoritma load_rules_live'dan okur.
-        st.session_state.load_rules_live = edited
+            # ── KRİTİK: load_rules_live = mevcut tablo durumu (base güncellenmez!) ──
+            # load_rules (base) asla inline düzenlemeden güncellenmez;
+            # aksi hâlde st.data_editor widget'ı sıfırlanır ve yazılan veri silinir.
+            # Algoritma load_rules_live'dan okur.
+            st.session_state.load_rules_live = edited
 
-        # Metrikler
-        if not edited.empty:
-            _adet = edited["Adet"].fillna(0)
-            _agir = edited["Ağırlık(kg)"].fillna(0)
-            m1, m2, m3, m4 = st.columns(4)
-            m1.metric("Toplam Parça", int(_adet.sum()))
-            m2.metric("Toplam Ağırlık", f"{float((_agir * _adet).sum()):,.0f} kg")
-            m3.metric("Altına yük konmaz", int(edited["Altına yerleştirilemez"].fillna(False).sum()))
-            m4.metric("Üstüne yük konmaz", int(edited["Üstüne yerleştirilemez"].fillna(False).sum()))
+            # Metrikler
+            if not edited.empty:
+                _adet = edited["Adet"].fillna(0)
+                _agir = edited["Ağırlık(kg)"].fillna(0)
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("Toplam Parça", int(_adet.sum()))
+                m2.metric("Toplam Ağırlık", f"{float((_agir * _adet).sum()):,.0f} kg")
+                m3.metric("Altına yük konmaz", int(edited["Altına yerleştirilemez"].fillna(False).sum()))
+                m4.metric("Üstüne yük konmaz", int(edited["Üstüne yerleştirilemez"].fillna(False).sum()))
 
-        if st.button("🔄 Yük Listesini Sıfırla",
-                     help="Tüm yükler ve silme geçmişi temizlenir, sıfırdan başlanır"):
-            for k in ["load_rules", "load_rules_live", "deleted_ids", "geom_store",
-                      "df_pallets", "sw_shapes", "sw_staging", "custom_profiles"]:
-                st.session_state.pop(k, None)
-            st.rerun()
+            if st.button("🔄 Yük Listesini Sıfırla",
+                         help="Tüm yükler ve silme geçmişi temizlenir, sıfırdan başlanır"):
+                for k in ["load_rules", "load_rules_live", "deleted_ids", "geom_store",
+                          "df_pallets", "sw_shapes", "sw_staging", "custom_profiles"]:
+                    st.session_state.pop(k, None)
+                st.rerun()
 
-    # st.fragment: Streamlit ≥ 1.33 — tablo düzenlenirken tam sayfa yeniden çalışmaz
-    try:
-        _load_rules_editor_ui = st.fragment(_load_rules_editor_ui)
-    except AttributeError:
-        pass  # Eski Streamlit — normal fonksiyon olarak çalışır
+        # st.fragment: Streamlit ≥ 1.33 — tablo düzenlenirken tam sayfa yeniden çalışmaz
+        try:
+            _load_rules_editor_ui = st.fragment(_load_rules_editor_ui)
+        except AttributeError:
+            pass  # Eski Streamlit — normal fonksiyon olarak çalışır
 
-    _load_rules_editor_ui()
+        _load_rules_editor_ui()
+
+        # Bu sayfa yalnız yük tanımı içindir; çalıştırma ve sonuçlar
+        # 🚀 Optimizasyon sayfasında.
+        st.stop()
 
 
     st.markdown("---")
