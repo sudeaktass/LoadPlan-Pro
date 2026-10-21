@@ -75,6 +75,10 @@ class Cekici:
     teknik_gcw_kg: Optional[float] = None
 
     # ── üstveri ──
+    # Serbest metin iki alan: Excel şablonunda da sütun olarak var.
+    # `kaynak_notlari` alan BAZINDA kaynak tutar; bunlar KAYDIN tamamı için.
+    kaynak: str = ""                     # ör. "Ford Trucks F-MAX Euro 6E föyü"
+    dogrulama_durumu: str = ""           # ör. "föy PDF'i arşivde yok"
     tanimsiz: bool = False                              # H: göç edilmiş kayıt
     varsayim_alanlari: Dict[str, str] = field(default_factory=dict)
     kaynak_notlari: Dict[str, str] = field(default_factory=dict)
@@ -185,6 +189,8 @@ class Dorse:
     iso_40ft_konteyner: bool = False
 
     # ── üstveri ──
+    kaynak: str = ""                           # ör. "Schmitz SCS 24/L föyü"
+    dogrulama_durumu: str = ""
     eski_arac_mi: bool = False                 # H: göç edilmiş kayıt
     varsayim_alanlari: Dict[str, str] = field(default_factory=dict)
     kaynak_notlari: Dict[str, str] = field(default_factory=dict)

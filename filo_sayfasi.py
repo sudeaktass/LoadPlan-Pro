@@ -420,6 +420,107 @@ def _dorse_formu(mevcut: Optional[Dorse]):
 # Eşleşme önizlemesi
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _excel_sekmesi(cekiciler: List[Cekici], dorseler: List[Dorse]) -> None:
+    """Excel'den toplu çekici/dorse ekleme (optimizasyon sayfasının eşi).
+
+    Şablon statik bir dosya değil, `filo_excel.sablon_uret()` ile anında
+    üretiliyor — veri modeline alan eklenince şablon kendiliğinden güncel
+    kalsın diye.
+    """
+    import filo_excel as fx
+
+    st.subheader("📊 Excel ile toplu ekleme")
+
+    c1, c2 = st.columns([1, 2])
+    with c1:
+        st.markdown("**1. Şablonu indir**")
+        st.caption("Boş şablon + örnek sayfa + her sütunun açıklaması.")
+        try:
+            st.download_button(
+                "⬇️ Boş şablonu indir", data=fx.sablon_uret(),
+                file_name="loadplan_filo_sablonu.xlsx",
+                mime=("application/vnd.openxmlformats-officedocument"
+                      ".spreadsheetml.sheet"),
+                type="primary", width="stretch", key="filo_sablon_indir")
+        except Exception as e:                               # noqa: BLE001
+            st.error(f"Şablon üretilemedi: {e}")
+
+        if cekiciler or dorseler:
+            st.markdown("**Mevcut filoyu dışa aktar**")
+            st.caption("Aynı biçimde; düzenleyip geri yükleyebilirsiniz.")
+            try:
+                st.download_button(
+                    "⬇️ Mevcut filoyu indir",
+                    data=fx.disa_aktar(cekiciler, dorseler),
+                    file_name="loadplan_filo.xlsx",
+                    mime=("application/vnd.openxmlformats-officedocument"
+                          ".spreadsheetml.sheet"),
+                    width="stretch", key="filo_disa_aktar")
+            except Exception as e:                           # noqa: BLE001
+                st.error(f"Dışa aktarılamadı: {e}")
+
+    with c2:
+        st.markdown("**2. Doldurulmuş dosyayı yükle**")
+        st.caption(f"'{fx.SAYFA_CEKICI}' ve '{fx.SAYFA_DORSE}' sayfaları "
+                   f"okunur. Bilinmeyen alanı **boş bırakın** — tahmini "
+                   f"değer yazmayın.")
+        dosya = st.file_uploader("Excel dosyası seç", type=["xlsx", "xls"],
+                                 key="filo_excel_yukle",
+                                 label_visibility="collapsed")
+
+    if dosya is None:
+        return
+
+    with st.spinner("Excel okunuyor…"):
+        yeni_ck, yeni_dr, hatalar, uyarilar = fx.oku(dosya.read())
+
+    for h in hatalar:
+        st.error(f"❌ {h}")
+    for u in uyarilar:
+        st.warning(f"⚠️ {u}")
+
+    if not yeni_ck and not yeni_dr:
+        st.info("Eklenecek kayıt bulunamadı.")
+        return
+
+    # ── Önizleme ────────────────────────────────────────────────────────
+    st.markdown("##### Okunan kayıtlar")
+    if yeni_ck:
+        st.caption(f"🚛 {len(yeni_ck)} çekici")
+        _cekici_listesi(yeni_ck)
+    if yeni_dr:
+        st.caption(f"🚍 {len(yeni_dr)} dorse")
+        _dorse_listesi(yeni_dr)
+
+    # Mevcut kayıtlarla çakışma
+    mevcut = {c.plaka for c in cekiciler} | {d.plaka for d in dorseler}
+    cakisan = sorted(
+        {k.plaka for k in list(yeni_ck) + list(yeni_dr)} & mevcut)
+    if cakisan:
+        st.warning("⚠️ Bu plakalar zaten kayıtlı, **üzerine yazılacak**: "
+                   + ", ".join(cakisan))
+
+    if st.button("✅ Filoya ekle", type="primary", key="filo_excel_uygula"):
+        eklenen, basarisiz = 0, []
+        for kayit in yeni_ck:
+            hata = _cekici_kaydet(kayit)
+            if hata:
+                basarisiz.append(f"{kayit.plaka}: {hata}")
+            else:
+                eklenen += 1
+        for kayit in yeni_dr:
+            hata = _dorse_kaydet(kayit)
+            if hata:
+                basarisiz.append(f"{kayit.plaka}: {hata}")
+            else:
+                eklenen += 1
+        for b in basarisiz:
+            st.error(f"❌ {b}")
+        if eklenen:
+            st.success(f"✅ {eklenen} kayıt eklendi/güncellendi.")
+            st.rerun()
+
+
 def _eslesme_onizleme(cekiciler: List[Cekici], dorseler: List[Dorse]):
     st.subheader("🔗 Eşleşme önizlemesi")
     if not cekiciler or not dorseler:
@@ -521,9 +622,10 @@ def render():
             st.success("Örnek filo eklendi.")
             st.rerun()
 
-    t1, t2, t3 = st.tabs([f"🚛 Çekiciler ({len(cekiciler)})",
-                          f"🚍 Dorseler ({len(dorseler)})",
-                          "🔗 Eşleşme"])
+    t1, t2, t3, t4 = st.tabs([f"🚛 Çekiciler ({len(cekiciler)})",
+                              f"🚍 Dorseler ({len(dorseler)})",
+                              "🔗 Eşleşme",
+                              "📊 Excel"])
 
     # ── Çekiciler ───────────────────────────────────────────────────────
     with t1:
@@ -581,6 +683,10 @@ def render():
             _pasife_al("dorse", mevcut.plaka)
             st.success(f"{mevcut.plaka} pasife alındı (kayıt silinmedi).")
             st.rerun()
+
+    # ── Excel ───────────────────────────────────────────────────────────
+    with t4:
+        _excel_sekmesi(cekiciler, dorseler)
 
     # ── Eşleşme ─────────────────────────────────────────────────────────
     with t3:
