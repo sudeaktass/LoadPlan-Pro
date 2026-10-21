@@ -289,6 +289,36 @@ def _doluluk_yenile(plan, trucks: Sequence[Truck3D], piece_info: Dict) -> None:
 # Çekici + dorse köprüsü (V-B veri modeli → motorun Truck3D'si)
 # ─────────────────────────────────────────────────────────────────────────────
 
+def kapasiteye_gore_suz(agirliklar: Sequence[float],
+                        kapasite_kg: float) -> Tuple[List[int], float]:
+    """
+    Sırayla gelen parçalardan kapasiteyi AŞMAYANLARI seçer.
+
+    Ortak EP motorundaki kuralın aynısı (`extreme_points_3d.py`: parça
+    eklenince `_weight_sum + piece.weight > truck.capacity` ise konmaz),
+    ama kendi motorunu kullanan yollar için (NFP) ayrı ve test edilebilir
+    bir fonksiyon olarak.
+
+    Sığmayan parça ATLANIR, sonrakiler denenmeye devam eder — böylece
+    ağır bir parça yüzünden arkasındaki hafif parçalar boşuna elenmez.
+
+    Args:
+        agirliklar: parçaların ağırlıkları, yerleştirme sırasında
+
+    Returns:
+        (secilen_indisler, toplam_agirlik)
+    """
+    secilen: List[int] = []
+    toplam = 0.0
+    for i, w in enumerate(agirliklar):
+        w = float(w or 0.0)
+        if toplam + w > kapasite_kg:
+            continue
+        toplam += w
+        secilen.append(i)
+    return secilen, toplam
+
+
 def mm_to_cm(mm: float) -> int:
     """mm → cm, AŞAĞI yuvarlayarak (karar S10).
 

@@ -1460,15 +1460,30 @@ def run_nfp(pieces, trucks, resolution=2.0, margin=0.5):
                 resolution=resolution, margin=margin)
             pmap = {p.id: p for p in pieces}
             bin_placements = []
-            for lg in layer_groups:
-                for pl in lg.placements:
-                    pobj = pmap.get(pl.piece_id)
-                    if not pobj: continue
-                    bin_placements.append(Placement3D(
-                        x=int(pl.x), y=int(pl.y), z=int(lg.z_start),
-                        width=pobj.width, length=pobj.length, height=pobj.height,
-                        piece_id=pl.piece_id, rotation=(0,int(pl.rotation_deg),0),
-                        bin_id=tidx))
+            # ── Kütle kapasitesi (adım 2b) ───────────────────────────────
+            # NFP ayrı bir motor (nfp_engine) kullandığı için ortak EP
+            # motorundaki ağırlık kontrolünü görmüyordu: 40 tonluk yük
+            # 25.757 kg'lık bir araçta "geçerli" görünebiliyordu. Kural
+            # diğer yedi algoritmayla AYNI: parça eklenince kapasite
+            # aşılıyorsa o parça bu araca konmaz.
+            from filo_havuzu import kapasiteye_gore_suz
+            _adaylar = [(lg, pl, pmap.get(pl.piece_id))
+                        for lg in layer_groups for pl in lg.placements
+                        if pmap.get(pl.piece_id) is not None]
+            _secilen, _bin_agirlik = kapasiteye_gore_suz(
+                [a[2].weight for a in _adaylar], truck.capacity)
+            _kapasite_disi = len(_adaylar) - len(_secilen)
+            for _i in _secilen:
+                lg, pl, pobj = _adaylar[_i]
+                bin_placements.append(Placement3D(
+                    x=int(pl.x), y=int(pl.y), z=int(lg.z_start),
+                    width=pobj.width, length=pobj.length, height=pobj.height,
+                    piece_id=pl.piece_id, rotation=(0,int(pl.rotation_deg),0),
+                    bin_id=tidx))
+            if _kapasite_disi:
+                print(f"  [NFP] {truck.id}: {_kapasite_disi} parça kütle "
+                      f"kapasitesi ({truck.capacity:,.0f} kg) nedeniyle "
+                      f"konmadı".replace(",", "."))
             all_bins.append(bin_placements)
             assignments[tidx] = truck.id
             tidx += 1
