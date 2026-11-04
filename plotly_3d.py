@@ -207,8 +207,16 @@ def _truck_wireframe(truck):
 
 
 def visualize_3d_plan(
-    plan, trucks, pieces, bin_id=0, show_truck=True, show_grid=True
+    plan, trucks, pieces, bin_id=0, show_truck=True, show_grid=True,
+    show_order=True
 ) -> go.Figure:
+    """3B yerleşim görseli.
+
+    show_order: Her ürünün üstüne YÜKLEME SIRASI numarasını yazar. Bu
+    numara sürücü talimatı PDF'i ve Excel talimat sayfasıyla BİREBİR
+    aynıdır (kural: `yukleme_sirasi.py`). Operatör kâğıttaki numarayı
+    görselde arayarak bulabilsin, okuma hatası olmasın diye.
+    """
     placements = plan.bins[bin_id] if bin_id < len(plan.bins) else []
     truck_id   = plan.truck_assignments.get(bin_id, trucks[0].id if trucks else "—")
     truck      = next((t for t in trucks if t.id == truck_id), trucks[0] if trucks else None)
@@ -308,15 +316,22 @@ def visualize_3d_plan(
                 "<extra></extra>"
             ),
         ))
+    # ── Yükleme sırası numaraları ───────────────────────────────────────
+    # Kural burada DEĞİL; sürücü talimatıyla aynı numara çıksın diye tek
+    # kaynaktan okunuyor.
+    from yukleme_sirasi import sira_numaralari
+    _sira_no = sira_numaralari(placements)
+
     seen = set()
-    for pl in placements:
+    for _i_pl, pl in enumerate(placements):
         piece  = piece_map.get(pl.piece_id)
         color  = id_colors.get(pl.piece_id, '#CCCCCC')
         w, l, h = pl.width, pl.length, pl.height
         show_leg = pl.piece_id not in seen; seen.add(pl.piece_id)
-        winfo = ""
+        # Sıra numarası hover'da da görünsün (görsel kapalıyken de okunur)
+        winfo = f"<b>Yükleme sırası: {_sira_no[_i_pl]}</b><br>"
         if piece:
-            winfo = f"Ağırlık: {piece.weight:.1f} kg<br>"
+            winfo += f"Ağırlık: {piece.weight:.1f} kg<br>"
             if not getattr(piece, 'is_stackable', True):
                 winfo += "🚫 Altına yük konmaz<br>"
             if getattr(piece, 'is_fragile', False):
@@ -439,6 +454,31 @@ def visualize_3d_plan(
                                f"Toplam: {w:.0f}×{l:.0f} cm"
                                "<extra></extra>"),
             ))
+    # ── Yükleme sırası rozetleri ────────────────────────────────────────
+    # Sürücü kâğıttaki numarayı görselde arayıp bulsun diye her ürünün
+    # ÜST yüzünün ortasına numarası yazılır. Koyu daire + beyaz yazı:
+    # ürünün kendi rengi ne olursa olsun okunur kalsın.
+    # Efsane (legend) üzerinden tek tıkla kapatılabilir.
+    if show_order and placements:
+        fig.add_trace(go.Scatter3d(
+            x=[pl.x + pl.width / 2 for pl in placements],
+            y=[pl.y + pl.length / 2 for pl in placements],
+            z=[pl.z + pl.height + 1 for pl in placements],
+            mode='markers+text',
+            marker=dict(size=16, color='rgba(15,23,42,0.85)',
+                        line=dict(color='#FFFFFF', width=1)),
+            text=[str(n) for n in _sira_no],
+            textposition='middle center',
+            textfont=dict(size=11, color='#FFFFFF',
+                          family='Arial Black, Arial, sans-serif'),
+            name='🔢 Yükleme sırası',
+            showlegend=True,
+            hovertext=[f"<b>Sıra {n}</b><br>{pl.piece_id}<br>"
+                       f"Konum (X,Y,Z): ({pl.x}, {pl.y}, {pl.z}) cm"
+                       for n, pl in zip(_sira_no, placements)],
+            hovertemplate="%{hovertext}<extra></extra>",
+        ))
+
     TW = truck.width if truck else 300
     TL = truck.length if truck else 600
     TH = truck.height if truck else 270

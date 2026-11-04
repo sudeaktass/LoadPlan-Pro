@@ -98,6 +98,18 @@ XLSX_ACCENT   = "BBDEFB"
 # PDF RAPORU
 # ============================================================================
 
+
+def _yuzde(deger, basamak: int = 1) -> str:
+    """Oranı yüzde metnine çevirir; bilinmiyorsa "—" (sıfır DEĞİL).
+
+    Doluluk ölçüleri app_3d.results_dict_from içinde `doluluk.py`
+    tarafından hesaplanır; burada formül YOKTUR, yalnız biçimlendirme.
+    """
+    if deger is None:
+        return "—"
+    return f"%{deger:.{basamak}f}"
+
+
 def generate_pdf_report(
     project_name:   str,
     company_name:   str,
@@ -167,7 +179,15 @@ def generate_pdf_report(
         ["Metrik", "Değer"],
         ["Kullanılan Araç Sayısı",      str(best.get("truck_count", "—"))],
         ["Yerleştirilen Palet",          f"{best.get('placed', '—')} / {best.get('total_req', '—')}"],
-        ["Hacimsel Doluluk Oranı",       f"%{best.get('utilization', 0):.1f}"],
+        ["Hacim Doluluğu  U_G",          _yuzde(best.get("utilization"))],
+        ["Hacim Doluluğu  U_BB (dış kutu)", _yuzde(best.get("u_bb"))],
+        ["Ağırlık Doluluğu  U_W",        _yuzde(best.get("u_w"))],
+        ["Bağlayıcı Ölçü",               best.get("baglayici") or "—"],
+        ["Yük Kütlesi (palet darası dâhil)",
+         f"{best.get('yuk_kg', 0):,.0f} kg"],
+        ["Faydalı Yük",
+         (f"{best['faydali_yuk_kg']:,.0f} kg"
+          if best.get("faydali_yuk_kg") else "—")],
         ["Toplam Yük Ağırlığı",          f"{best.get('total_weight', 0):,.0f} kg"],
         ["Fire Hacmi",                   f"{best.get('waste_cm3', 0)/1e6:.3f} m³"],
         ["Optimizasyon Süresi",          f"{best.get('execution_time', 0):.2f} sn"],
@@ -195,19 +215,22 @@ def generate_pdf_report(
         elements.append(HRFlowable(width=W, thickness=0.5, color=BRAND_ACCENT))
         elements.append(Spacer(1, 0.2*cm))
 
-        cmp_data = [["Algoritma", "Kamyon", "Yerleşen", "Doluluk", "Süre (sn)"]]
+        cmp_data = [["Algoritma", "Kamyon", "Yerleşen", "U_G", "U_W",
+                     "Bağlayıcı", "Süre (sn)"]]
         for algo, r in sorted(results.items(), key=lambda x: -x[1].get("utilization", 0)):
             is_best = (algo == best_algo)
             row = [
                 f"★ {algo}" if is_best else algo,
                 str(r.get("truck_count", "—")),
                 f"{r.get('placed', '—')}/{r.get('total_req', '—')}",
-                f"%{r.get('utilization', 0):.1f}",
+                _yuzde(r.get("utilization")),
+                _yuzde(r.get("u_w")),
+                r.get("baglayici") or "—",
                 f"{r.get('execution_time', 0):.2f}",
             ]
             cmp_data.append(row)
 
-        col_w = [W * f for f in (0.35, 0.12, 0.18, 0.18, 0.17)]
+        col_w = [W * f for f in (0.26, 0.10, 0.15, 0.12, 0.12, 0.13, 0.12)]
         cmp_table = Table(cmp_data, colWidths=col_w)
         style = [
             ("BACKGROUND",    (0, 0), (-1, 0),  BRAND_BLUE),
@@ -232,8 +255,54 @@ def generate_pdf_report(
         elements.append(cmp_table)
         elements.append(Spacer(1, 0.6*cm))
 
+    # ── ARAÇ BAŞINA DOLULUK (R-a) ─────────────────────────────────────────────
+    # Satırlar doluluk.arac_satirlari() ile üretildi; burada formül YOK.
+    _arac_sat = best.get("arac_satirlari") or []
+    if _arac_sat:
+        elements.append(Paragraph("3. Araç Başına Doluluk", h2))
+        elements.append(HRFlowable(width=W, thickness=0.5, color=BRAND_ACCENT))
+        elements.append(Spacer(1, 0.2*cm))
+        _basliklar = ["Araç", "Parça", "U_G", "U_BB", "U_W", "Bağlayıcı",
+                      "Yük (kg)", "Faydalı yük (kg)"]
+        _dol_data = [_basliklar]
+        for _r in _arac_sat:
+            _dol_data.append([
+                str(_r["Araç"]), str(_r["Parça"]), _r["U_G (hacim)"],
+                _r["U_BB (dış kutu)"], _r["U_W (ağırlık)"], _r["Bağlayıcı"],
+                f"{_r['Yük (kg)']:,.0f}" if isinstance(_r["Yük (kg)"], (int, float))
+                else str(_r["Yük (kg)"]),
+                (f"{_r['Faydalı yük (kg)']:,.0f}"
+                 if isinstance(_r["Faydalı yük (kg)"], (int, float))
+                 else str(_r["Faydalı yük (kg)"])),
+            ])
+        _dol_table = Table(_dol_data,
+                           colWidths=[W * f for f in
+                                      (0.24, 0.08, 0.10, 0.10, 0.10, 0.12,
+                                       0.13, 0.13)])
+        _dol_table.setStyle(TableStyle([
+            ("BACKGROUND",    (0, 0), (-1, 0),  BRAND_BLUE),
+            ("TEXTCOLOR",     (0, 0), (-1, 0),  colors.white),
+            ("FONTNAME",      (0, 0), (-1, 0),  _TR_FONT_BOLD),
+            ("FONTNAME",      (0, 1), (-1, -1), _TR_FONT),
+            ("FONTSIZE",      (0, 0), (-1, -1), 8),
+            ("ALIGN",         (1, 0), (-1, -1), "CENTER"),
+            ("ALIGN",         (0, 0), (0, -1),  "LEFT"),
+            ("ROWBACKGROUNDS",(0, 1), (-1, -1), [colors.white, BRAND_LIGHT]),
+            ("GRID",          (0, 0), (-1, -1), 0.5, BRAND_GRAY),
+            ("TOPPADDING",    (0, 0), (-1, -1), 3),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+        ]))
+        elements.append(_dol_table)
+        elements.append(Spacer(1, 0.25*cm))
+        elements.append(Paragraph(
+            "Hacim doluluğu gerçek parça hacmiyle, ağırlık doluluğu faydalı "
+            "yüke göre hesaplanır. Yük kütlesine palet darası dâhildir. "
+            "Filo toplamı, araç oranlarının ortalaması değil, toplamların "
+            "oranıdır.", caption))
+        elements.append(Spacer(1, 0.6*cm))
+
     # ── ARAÇ FİLOSU ───────────────────────────────────────────────────────────
-    elements.append(Paragraph("3. Araç Filosu", h2))
+    elements.append(Paragraph("4. Araç Filosu", h2))
     elements.append(HRFlowable(width=W, thickness=0.5, color=BRAND_ACCENT))
     elements.append(Spacer(1, 0.2*cm))
     truck_data = [["ID", "G (cm)", "U (cm)", "Y (cm)", "Kapasite (kg)", "Adet"]]
@@ -264,7 +333,7 @@ def generate_pdf_report(
     elements.append(Spacer(1, 0.6*cm))
 
     # ── PALET LİSTESİ ─────────────────────────────────────────────────────────
-    elements.append(Paragraph("4. Palet / Yük Listesi", h2))
+    elements.append(Paragraph("5. Palet / Yük Listesi", h2))
     elements.append(HRFlowable(width=W, thickness=0.5, color=BRAND_ACCENT))
     elements.append(Spacer(1, 0.2*cm))
 
@@ -439,13 +508,11 @@ def _add_loading_sheet(wb, sheet_title: str, project_name: str,
         ws_lt.row_dimensions[current_row].height = 18
         current_row += 1
 
-        # Yükleme sırası: kabin tarafı (Y=0) önce → kapıya ilerle (LIFO)
-        sorted_placements = sorted(
-            bin_placements,
-            key=lambda pl: (_gp(pl, "y", 0), _gp(pl, "z", 0), _gp(pl, "x", 0)),
-        )
-
-        for seq, pl in enumerate(sorted_placements, 1):
+        # Yükleme sırası: kural `yukleme_sirasi.py`'de — burada kopyası YOK.
+        # (Eskiden bu satırda ayrı bir sorted(...) vardı; sürücü PDF'iyle
+        #  farklı numara üretme riski taşıyordu.)
+        from yukleme_sirasi import sirali
+        for seq, pl in sirali(bin_placements):
             pid = _gp(pl, "piece_id", "—") or "—"
             px, py, pz = _gp(pl, "x", 0), _gp(pl, "y", 0), _gp(pl, "z", 0)
             pw, pln, pht = _gp(pl, "width", 0), _gp(pl, "length", 0), _gp(pl, "height", 0)
@@ -556,7 +623,14 @@ def generate_excel_report(
         ("Metrik", "Değer"),
         ("Kullanılan Araç", best.get("truck_count", "—")),
         ("Yerleştirilen Palet", f"{best.get('placed', '—')} / {best.get('total_req', '—')}"),
-        ("Doluluk Oranı (%)", round(best.get("utilization", 0), 1)),
+        ("Hacim Doluluğu U_G", _yuzde(best.get("utilization"))),
+        ("Hacim Doluluğu U_BB", _yuzde(best.get("u_bb"))),
+        ("Ağırlık Doluluğu U_W", _yuzde(best.get("u_w"))),
+        ("Bağlayıcı Ölçü", best.get("baglayici") or "—"),
+        ("Yük Kütlesi (kg, palet darası dâhil)",
+         round(best.get("yuk_kg", 0), 1)),
+        ("Faydalı Yük (kg)", (round(best["faydali_yuk_kg"], 1)
+                              if best.get("faydali_yuk_kg") else "—")),
         ("Toplam Ağırlık (kg)", round(best.get("total_weight", 0), 1)),
         ("Fire (m³)", round(best.get("waste_cm3", 0) / 1e6, 3)),
         ("Süre (sn)", round(best.get("execution_time", 0), 2)),
@@ -661,9 +735,28 @@ def generate_excel_report(
     # ========================================================================
     # Sayfa 4: Karşılaştırma
     # ========================================================================
+    # ── Araç başına doluluk (R-a) ───────────────────────────────────────
+    _arac_sat = results.get(best_algo, {}).get("arac_satirlari") or []
+    if _arac_sat:
+        ws_dol = wb.create_sheet("Araç Doluluk")
+        _dh = ["Araç", "Parça", "U_G (hacim)", "U_BB (dış kutu)",
+               "U_W (ağırlık)", "Bağlayıcı", "Yük (kg)", "Faydalı yük (kg)"]
+        for c, h in enumerate(_dh, 1):
+            style_header(ws_dol.cell(1, c, h))
+        for i, _r in enumerate(_arac_sat, 2):
+            for c, h in enumerate(_dh, 1):
+                ws_dol.cell(i, c, _r[h])
+        ws_dol.cell(len(_arac_sat) + 3, 1,
+                    "Hacim doluluğu gerçek parça hacmiyle, ağırlık doluluğu "
+                    "faydalı yüke göre hesaplanır. Yük kütlesine palet "
+                    "darası dâhildir.")
+        for col, w in zip("ABCDEFGH", (26, 8, 13, 16, 14, 12, 12, 16)):
+            ws_dol.column_dimensions[col].width = w
+
     ws_cmp = wb.create_sheet("Karşılaştırma")
-    cmp_headers = ["Algoritma", "Kamyon", "Yerleşen", "Toplam", "Doluluk (%)",
-                   "Fire (m³)", "Süre (sn)"]
+    cmp_headers = ["Algoritma", "Kamyon", "Yerleşen", "Toplam",
+                   "U_G hacim (%)", "U_BB dış kutu (%)", "U_W ağırlık (%)",
+                   "Bağlayıcı", "Fire (m³)", "Süre (sn)"]
     for c, h in enumerate(cmp_headers, 1):
         style_header(ws_cmp.cell(1, c, h))
 
@@ -675,6 +768,9 @@ def generate_excel_report(
             r.get("placed", "—"),
             r.get("total_req", "—"),
             round(r.get("utilization", 0), 1),
+            (round(r["u_bb"], 1) if r.get("u_bb") is not None else "—"),
+            (round(r["u_w"], 1) if r.get("u_w") is not None else "—"),
+            r.get("baglayici") or "—",
             round(r.get("waste_cm3", 0) / 1e6, 3),
             round(r.get("execution_time", 0), 2),
         ]
@@ -849,33 +945,16 @@ def _make_qr_image(data: str, size_cm: float = 1.2) -> "Optional[object]":
 
 
 def _compute_loading_order(placements: List[dict]) -> List[int]:
-    """
-    Yükleme sırası (fiziksel satır-katman mantığı).
+    """Yükleme sırası — kural `yukleme_sirasi.py`'de, BURADA DEĞİL.
 
-    EKSEN KONVANSİYONU: Kapı Y = maks (uzunluk) tarafındadır; priority=1
-    bölgesi (y >= 0.70·L) "kapıya en yakın"dır. Yükleme kapıdan yapıldığı
-    için ilk ürün kapıdan EN UZAK noktaya (kabin tarafı, Y=0) yerleşir:
-      1) Y artan   — kabin tarafından başla (kapıdan uzak = önce yükle)
-      2) Z artan   — o satırın alt katmanı önce, üst katmanı hemen ardından
-      3) X artan   — aynı Y+Z seviyesinde soldan sağa (tiebreaker)
-
-    Sonuç: kabin tarafı alt katman → üst katman → bir sıra kapıya doğru →
-           … → kapıya en yakın (öncelikli) ürün EN SON yüklenir (LIFO).
+    Sürücü PDF'i, Excel talimat sayfası ve 3B görsel aynı numarayı
+    göstersin diye tek kaynaktan okunur.
 
     Returns:
-        placements listesinin her elemanı için sıra numarası (1-based) listesi
+        placements listesinin her elemanı için sıra numarası (1-based).
     """
-    indexed = list(enumerate(placements))
-    indexed.sort(key=lambda ix: (
-         ix[1].get("y", 0),    # kabin tarafı önce (kapıdan uzak)
-         ix[1].get("z", 0),    # alt katman önce
-         ix[1].get("x", 0),    # soldan sağa tiebreaker
-    ))
-    # Sıra numarası map'i: orig_index → load_order (1-based)
-    order_map = {}
-    for load_order, (orig_index, _) in enumerate(indexed, start=1):
-        order_map[orig_index] = load_order
-    return [order_map[i] for i in range(len(placements))]
+    from yukleme_sirasi import sira_numaralari
+    return sira_numaralari(placements)
 
 
 def generate_loading_sheet_pdf(

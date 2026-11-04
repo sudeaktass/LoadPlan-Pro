@@ -451,7 +451,7 @@ div[data-testid="stSidebarNav"] {display:none}
         st.markdown("---")
         st.header("⚙️ Parametreler")
         active = [sel_algo] if sel_algo else sel_algos
-        ts_time=30; ts_tenure=7; sa_time=30; sa_temp=1000.0; sa_cool=0.995
+        ts_time=30; ts_tenure=7; sa_time=30; sa_temp=0.0; sa_cool=0.995
         mc_iter=100; ga_pop=50; ga_gen=100; ga_time=60; ga_workers=0
         layer_strat="adaptive"
         nfp_res=2.0; nfp_margin=0.5
@@ -470,7 +470,26 @@ div[data-testid="stSidebarNav"] {display:none}
             ts_tenure = st.slider("Tenure",3,20,7)
         with st.expander("🌡️ Simulated Annealing", expanded="sa_hybrid" in active):
             sa_time = st.slider("Süre",5,120,30,5,key="sa_t")
-            sa_temp = float(st.slider("Başlangıç T",100,5000,1000,100))
+            # Başlangıç sıcaklığı amaç fonksiyonunun ÖLÇEĞİNE bağlıdır.
+            # Amaç fonksiyonu 22 Ekim 2026'da yeniden kuruldu (uygunluk
+            # artık ~20 mertebesinde, eskiden milyonlardaydı); elle girilen
+            # 1000 gibi bir değer "her hamleyi kabul et" anlamına gelir ve
+            # tavlamayı rastgele yürüyüşe çevirir. Bu yüzden varsayılan
+            # OTOMATİK: Kirkpatrick (1983) kalibrasyonu, p0 = 0,80.
+            sa_auto = st.checkbox(
+                "Başlangıç sıcaklığını otomatik hesapla", value=True,
+                key="sa_auto",
+                help="Önerilen. Kirkpatrick (1983) yöntemiyle, örnek "
+                     "hamlelerin ortalama farkından hesaplanır ve amaç "
+                     "fonksiyonunun ölçeğine kendiliğinden uyar. Elle "
+                     "girilen değer yanlış ölçekteyse SA rastgele yürüyüşe "
+                     "döner.")
+            if sa_auto:
+                sa_temp = 0.0          # 0 = otomatik kalibrasyon
+            else:
+                sa_temp = float(st.slider("Başlangıç T", 1, 200, 20, 1,
+                                          help="Uygunluk ölçeğiyle aynı "
+                                               "mertebede olmalı."))
             sa_cool = float(st.slider("Soğuma",0.990,0.999,0.995,0.001,format="%.3f"))
         with st.expander("🎲 Monte Carlo", expanded="monte_carlo" in active):
             mc_iter = st.slider("Deneme",10,500,100,10)
@@ -552,7 +571,7 @@ div[data-testid="stSidebarNav"] {display:none}
                         st.session_state.get("df_trucks", pd.DataFrame()))
         mode="🎯 Tek"; sel_algo="ffd_ep"; sel_algos=[]
         active=["ffd_ep"]; ts_time=30; ts_tenure=7; sa_time=30; rng_seed=None
-        sa_temp=1000.0; sa_cool=0.995; mc_iter=100; ga_pop=50; ga_gen=100
+        sa_temp=0.0; sa_cool=0.995; mc_iter=100; ga_pop=50; ga_gen=100
         ga_time=60; ga_workers=0
         layer_strat="adaptive"; nfp_res=2.0; nfp_margin=0.5
         show_truck=show_grid=show_nfp2d=True; show_weight=False; compact_fwd=True; use_fleet_opt=False
@@ -1055,6 +1074,24 @@ def build_trucks(df):
     return trucks
 
 
+DONDURULMUS_ALGORITMALAR = frozenset({"island_ga", "multistart_sa", "bayesian"})
+"""Yerleştirme algoritması OLARAK kullanılmayan varyantlar (karar A).
+
+21 Ekim 2026'da arayüzden çıkarılmışlardı; 22 Ekim 2026'da erişim
+noktalarının tamamı kapatıldı:
+  * kullanıcıya açık seçim listeleri  (zaten `advanced` süzgeciyle)
+  * algoritma açıklama/öneri kartının veri yükü
+  * `run_algo` sevk tablosu           (aşağıdaki koruma)
+  * `iterative_optimizer_3d.HybridPipeline.default()` (IslandGA aşaması)
+  * `fleet_optimizer_3d` çağrısındaki `use_bayesian` bayrağı
+
+KODLARI SİLİNMEDİ. `island_genetic_3d.py`, `multistart_sa_3d.py` ve
+`bayesian_optimizer_3d.py` olduğu gibi duruyor ve varyant analizi için
+DOĞRUDAN import edilip çağrılabilir (deney/kanıt betikleri böyle yapar).
+Kapatılan şey, kullanıcıya açık yerleşim akışlarıdır.
+"""
+
+
 def run_algo(key, pieces, trucks, _bypass_phase1=False, **kw):
     """
     Her algoritma için 4 fazlı çalışma:
@@ -1192,6 +1229,11 @@ def run_algo(key, pieces, trucks, _bypass_phase1=False, **kw):
         return cleanup_empty_bins(plan)
 
     eng = "EP"
+    if key in DONDURULMUS_ALGORITMALAR:
+        raise ValueError(
+            f"'{key}' yerleştirme algoritması olarak kullanılmıyor "
+            f"(karar A). Varyant analizi için modülü doğrudan çağırın.")
+
     if key == "greedy_ep":
         from greedy_3d import greedy_3d_optimization
         return _ensure_all_placed(
@@ -1225,7 +1267,7 @@ def run_algo(key, pieces, trucks, _bypass_phase1=False, **kw):
         return _ensure_all_placed(
             simulated_annealing_3d_optimization(pieces, trucks, initial_solution=init,
                 max_time=kw.get("sa_time",30),
-                initial_temp=kw.get("sa_temp",1000.0),
+                initial_temp=kw.get("sa_temp", 0.0),   # 0 = otomatik (Kirkpatrick)
                 cooling_rate=kw.get("sa_cool",0.995), engine=eng,
                 seed=kw.get("seed"),
                 progress_callback=kw.get("progress_cb")))
@@ -1476,15 +1518,25 @@ def _palet_render():
     """
     import palet_kutuphanesi as pk
 
-    with st.expander("🧱 Hazır palet seç — standart ölçüler", expanded=False):
+    with st.expander("🧱 Palet + yük ekle — önerilen yol", expanded=True):
+        st.caption(
+            "Gerçek sevkiyatta yükler **palet üzerinde** taşınır. Burada "
+            "paleti ve üstündeki yükü **birlikte** girersiniz; palet darası "
+            "ve yüksekliği toplama otomatik eklenir. Elle giriş de "
+            "mümkündür ama palet darası o zaman sizin sorumluluğunuzdadır.")
         _mod = st.radio(
             "Giriş biçimi",
-            ["🧱 Hazır palet", "✏️ Özel ölçü (aşağıdaki tablo)"],
+            ["🧱 Palet + yük (önerilen)", "✏️ Palet olmadan (aşağıdaki tablo)"],
             horizontal=True, key="palet_mod",
+            help="Palet + yük: standart palet seçersiniz, üstündeki yükün "
+                 "yüksekliğini ve ağırlığını girersiniz. Palet olmadan: "
+                 "doğrudan Yük Listesi tablosuna satır eklersiniz.",
         )
         if _mod.startswith("✏️"):
-            st.caption("Aşağıdaki **Yük Listesi** tablosuna elle satır "
-                       "ekleyin — bu akış değişmedi.")
+            st.warning(
+                "⚠️ Palet olmadan giriyorsunuz. Yük Listesi'ne yazdığınız "
+                "**yükseklik ve ağırlığa paleti de dâhil etmeyi unutmayın** "
+                "— aksi hâlde plan gerçekten daha hafif ve alçak çıkar.")
             return
 
         _paletler = pk.tum_paletler()
@@ -1581,57 +1633,32 @@ def _palet_render():
 def _show_fleet_report(plan, pieces, trucks):
     """Araç başına doluluk (R-a) ve dingil yükleri (D-b).
 
-    U_V tanımı DEĞİŞMİYOR: gerçek hacim (silindirde πr²h) ÷ aracın hacmi —
-    yani mevcut U_G tanımı. Yanına ağırlık kullanımı U_W eklenir.
-    "Bağlayıcı ölçü" seçimi S11 kararını beklediği için burada YAPILMIYOR;
-    ikisi de ayrı ayrı gösteriliyor.
+    Doluluk formülü BURADA DEĞİL, `doluluk.py`'de. Arayüz ve raporlar aynı
+    fonksiyonu çağırır ki aynı plan için iki farklı yüzde çıkmasın.
     """
     if not trucks or not plan or not plan.bins:
         return
-    from core_3d import piece_used_volume
-    from doluluk import AracDoluluk, PlanDoluluk
+    import doluluk as dk
+
+    rapor = dk.plan_doluluk(plan, pieces, trucks)
+    if not rapor.araclar:
+        return
 
     piece_info = {p.id: p for p in pieces}
     tid = {t.id: t for t in trucks}
     atama = plan.truck_assignments or {}
 
-    satirlar, dingil_satirlari, uyarilar = [], [], []
-    rapor = PlanDoluluk()
-
+    # ── Dingil yükleri (D-b) — doluluktan ayrı bir konu ─────────────────
+    dingil_satirlari, uyarilar = [], []
     for bid, bps in enumerate(plan.bins):
         if not bps:
             continue
         t = tid.get(atama.get(bid))
-        if t is None:
-            continue
-        gercek = sum(piece_used_volume(p, piece_info) for p in bps)
-        yuk_kg = sum(getattr(piece_info.get(p.piece_id), "weight", 0) or 0
-                     for p in bps)
-        es = getattr(t, "eslesme", None)
-        ad = (f"{es.cekici.plaka} + {es.dorse.plaka}") if es else t.id
-
-        a = AracDoluluk(
-            etiket=ad, gercek_hacim=gercek,
-            dis_kutu_hacim=sum(p.get_volume() for p in bps),
-            arac_hacim=t.get_volume(), yuk_kg=yuk_kg,
-            faydali_yuk_kg=t.capacity,
-            bos_agirlik_kg=((es.cekici.bos_agirlik_kg + es.dorse.bos_agirlik_kg)
-                            if es else 0.0),
-        )
-        rapor.araclar.append(a)
-        satirlar.append({
-            "Araç": ad,
-            "Parça": len(bps),
-            "U_V (hacim)": f"%{(a.u_v or 0) * 100:.1f}",
-            "U_W (ağırlık)": f"%{(a.u_w or 0) * 100:.1f}",
-            "Yük (kg)": f"{yuk_kg:,.0f}".replace(",", "."),
-            "Faydalı yük (kg)": f"{t.capacity:,.0f}".replace(",", "."),
-        })
-
-        # ── Dingil yükleri ──
+        es = getattr(t, "eslesme", None) if t is not None else None
         if es is None:
             continue
         from dingil_yuku import arac_dingil_raporu, cm_to_mm_cg
+        ad = f"{es.cekici.plaka} + {es.dorse.plaka}"
         yukler = [((getattr(piece_info.get(p.piece_id), "weight", 0) or 0),
                    cm_to_mm_cg(p.y, p.length)) for p in bps]
         sonuc = arac_dingil_raporu(es, yukler)
@@ -1640,51 +1667,55 @@ def _show_fleet_report(plan, pieces, trucks):
                                               if sonuc.uyarilar else
                                               "dingil kontrolü yapılamadı"))
             continue
-        s = es.dingil_sinirlari
+        sin = es.dingil_sinirlari
         for etiket, yuk, sinir in (
-                ("ön dingil", sonuc.yukler.on_dingil_kg, s.on_dingil_kg),
+                ("ön dingil", sonuc.yukler.on_dingil_kg, sin.on_dingil_kg),
                 ("tahrik dingili", sonuc.yukler.tahrik_dingil_kg,
-                 s.tahrik_dingil_kg),
-                ("kingpin", sonuc.yukler.kingpin_kg, s.kingpin_kg),
+                 sin.tahrik_dingil_kg),
+                ("kingpin", sonuc.yukler.kingpin_kg, sin.kingpin_kg),
                 ("dingil grubu", sonuc.yukler.dingil_grubu_kg,
-                 s.dingil_grubu_kg),
-                ("toplam", sonuc.yukler.toplam_kg, s.toplam_kg)):
+                 sin.dingil_grubu_kg),
+                ("toplam", sonuc.yukler.toplam_kg, sin.toplam_kg)):
             if sinir is None:
                 continue
-            asim = yuk > sinir
             dingil_satirlari.append({
                 "Araç": ad, "Sınır": etiket,
                 "Yük (kg)": f"{yuk:,.0f}".replace(",", "."),
                 "Limit (kg)": f"{sinir:,.0f}".replace(",", "."),
                 "Oran": f"%{yuk / sinir * 100:.0f}" if sinir else "—",
-                "Durum": "🔴 AŞIM" if asim else "✅",
+                "Durum": "🔴 AŞIM" if yuk > sinir else "✅",
             })
         uyarilar.extend(f"**{ad}** — {u}" for u in sonuc.uyarilar
                         if "VARSAYIM" in u or "yapılamadı" in u)
 
-    if not satirlar:
-        return
-
-    _etiket = (f"📊 Araç başına doluluk ve dingil yükleri — "
-               f"{len(satirlar)} araç")
-    with st.expander(_etiket, expanded=False):
+    with st.expander(f"📊 Araç başına doluluk ve dingil yükleri — "
+                     f"{rapor.arac_sayisi} araç", expanded=False):
         st.markdown("**Doluluk (R-a)**")
-        st.dataframe(pd.DataFrame(satirlar), hide_index=True, width="stretch")
+        st.caption(dk.ACIKLAMA_NOTU)
+        st.dataframe(pd.DataFrame(dk.arac_satirlari(rapor)),
+                     hide_index=True, width="stretch")
+
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("U_V (toplam)", f"%{(rapor.u_v or 0) * 100:.1f}",
-                  help="Gerçek hacim ÷ kullanılan araçların hacmi — "
-                       "mevcut U_G tanımı, değişmedi.")
-        c2.metric("U_W (toplam)", f"%{(rapor.u_w or 0) * 100:.1f}",
-                  help="Yük kütlesi ÷ toplam faydalı yük.")
-        c3.metric("U_V en düşük", f"%{(rapor.u_v_en_dusuk or 0) * 100:.1f}")
+        c1.metric("U_G — hacim (toplam)", dk.yuzde(rapor.u_g),
+                  help="Gerçek parça hacmi ÷ kullanılan araçların iç hacmi. "
+                       "Ana ölçü; tanımı değişmedi.")
+        c2.metric("U_W — ağırlık (toplam)", dk.yuzde(rapor.u_w),
+                  help="Yük kütlesi ÷ toplam faydalı yük. Palet darası "
+                       "yük kütlesine dâhildir.")
+        c3.metric("Bağlayıcı ölçü", rapor.baglayici or "—",
+                  help="Filoyu önce hangisi dolduruyor.")
         c4.metric("Toplam boş ağırlık",
                   f"{rapor.toplam_bos_agirlik_kg:,.0f} kg".replace(",", "."),
                   help="Taşınan ölü ağırlık. YALNIZCA raporlanır; "
                        "sıralamada kullanılmaz (K1'in 2. ölçütü açık).")
         st.caption(
-            f"Araç başına U_V ortalaması: "
-            f"%{(rapor.u_v_ortalama or 0) * 100:.1f} — heterojen filoda "
-            f"toplam oranla ayrışır, bu yüzden ikisi birlikte veriliyor.")
+            f"U_BB (dış kutu): {dk.yuzde(rapor.u_bb)} · "
+            f"araç başına U_G ortalaması {dk.yuzde(rapor.u_g_ortalama)}, "
+            f"en düşüğü {dk.yuzde(rapor.u_g_en_dusuk)} · "
+            f"U_W ortalaması {dk.yuzde(rapor.u_w_ortalama)}, "
+            f"en düşüğü {dk.yuzde(rapor.u_w_en_dusuk)}. "
+            f"Filo toplamı araç oranlarının ortalaması DEĞİL, "
+            f"toplamların oranıdır.")
 
         if dingil_satirlari:
             st.markdown("**Dingil yükleri (D-b)** — "
@@ -1695,6 +1726,88 @@ def _show_fleet_report(plan, pieces, trucks):
             st.warning(f"⚠️ {u}")
 
 
+def _show_weight_distribution(plan, pieces, trucks):
+    """Ağırlık dağılımı — 1. ADIM: YALNIZCA ÖLÇER.
+
+    Hiçbir algoritmayı değiştirmez. Amacı "ağırlık merkezi şu an ne
+    kadar kötü?" sorusunu sayıyla cevaplamak; sonradan dengeleme
+    (2. adım) uygulanınca önce/sonra karşılaştırılabilsin diye.
+
+    Formül BURADA DEĞİL, `agirlik_dagilimi.py`'de.
+    """
+    if not trucks or not plan or not plan.bins:
+        return
+    import agirlik_dagilimi as agd
+
+    rapor = agd.plan_agirlik_dagilimi(plan, pieces, trucks)
+    if not rapor.araclar:
+        return
+
+    with st.expander(f"⚖️ Ağırlık dağılımı (ölçüm) — "
+                     f"{rapor.arac_sayisi} araç", expanded=False):
+        st.caption(agd.ACIKLAMA_NOTU)
+        st.dataframe(pd.DataFrame(agd.arac_satirlari(rapor)),
+                     hide_index=True, width="stretch")
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Hedeften sapma — ortalama",
+                  agd.cm(rapor.sapma_y_ortalama_cm),
+                  help="Ağırlık merkezinin ön %40 hedefine uzaklığı. "
+                       "Yarı römorkta bu nokta kingpin ile dingil "
+                       "grubunun ortasıdır.")
+        c2.metric("Hedeften sapma — en kötü",
+                  agd.cm(rapor.sapma_y_en_kotu_cm))
+        c3.metric("Yanal sapma — en kötü",
+                  agd.cm(rapor.sapma_x_en_kotu_cm),
+                  help="Sol/sağ denge. Hedef genişliğin ortasıdır.")
+        c4.metric("Yoğunlaşma — en kötü",
+                  agd.sayi(rapor.yogunlasma_en_kotu),
+                  help="En ağır metre ÷ ortalama metre. 1,0 = yük boy "
+                       "boyunca düzgün dağılmış. Büyüdükçe bir yerde "
+                       "kümelenme artar.")
+
+        st.caption(
+            f"Araç boyunun TAM ORTASINA ortalama uzaklık: "
+            f"**{agd.cm(rapor.sapma_orta_y_ortalama_cm)}** — bu ölçü "
+            f"Davies & Bischoff (1999) ile doğrudan karşılaştırılabilir. "
+            f"Onların testlerinde dengeleme ÖNCESİ ortalama 77–122 cm, "
+            f"SONRASI kutu çeşidine göre 17,8 → 0,0 cm aralığındaydı.")
+
+        # ── 2. adımın ön koşulu: takas edilecek blok var mı? ────────────
+        uygun = rapor.dengelenebilir_arac_sayisi
+        if uygun == rapor.arac_sayisi:
+            st.success(
+                f"✅ **{uygun}/{rapor.arac_sayisi} araçta** blok takası "
+                f"uygulanabilir (en az iki ayrık bölüm var). Sonradan "
+                f"dengeleme (2. adım) bu planda çalışabilir.")
+        elif uygun:
+            st.info(
+                f"ℹ️ **{uygun}/{rapor.arac_sayisi} araçta** blok takası "
+                f"uygulanabilir. Tek bölümden oluşan araçlarda takas "
+                f"edilecek bir şey yoktur.")
+        else:
+            st.warning(
+                "⚠️ Hiçbir araçta ayrık bölüm yok — yerleşim tek bir "
+                "bütün. Blok takasıyla dengeleme bu planda iş görmez.")
+
+        # ── En kötü aracın metre profili ────────────────────────────────
+        en_kotu = max(rapor.araclar,
+                      key=lambda a: a.yogunlasma or 0.0)
+        if en_kotu.metre_kg:
+            st.markdown(f"**Metre başına yük — {en_kotu.etiket}** "
+                        f"(yoğunlaşması en yüksek araç)")
+            st.caption("Ön duvardan kapıya doğru her metrede kaç kg var. "
+                       "Parçaların ağırlığı kendi uzunluğu boyunca "
+                       "yayılmış sayılır.")
+            # Metre numarası SAYI olarak verilmeli; metin olursa Streamlit
+            # ekseni alfabetik sıralar (1, 10, 11, ... 2, 3) ve grafik
+            # yanıltıcı olur.
+            st.bar_chart(
+                pd.DataFrame({"Metre": list(range(1, len(en_kotu.metre_kg) + 1)),
+                              "kg": en_kotu.metre_kg}),
+                x="Metre", y="kg", height=220)
+
+
 def show_kpis(plan, pieces, trucks=None):
     placed       = sum(len(b) for b in plan.bins)
     total        = sum(p.quantity for p in pieces)
@@ -1702,17 +1815,40 @@ def show_kpis(plan, pieces, trucks=None):
     total_weight = sum(p.weight * p.quantity for p in pieces)
     piece_info   = {p.id: p for p in pieces}
 
-    c1,c2,c3,c4,c5 = st.columns(5)
+    # ── Doluluk: TEK kaynak (doluluk.py) ────────────────────────────────
+    # Ana "Doluluk %" ölçüsü U_G'dir ve tanımı DEĞİŞMEDİ; yanına ağırlık
+    # doluluğu U_W eklendi. Hesap burada yapılmaz, modülden gelir.
+    import doluluk as dk
+    _dol = dk.plan_doluluk(plan, pieces, trucks or [])
+    _ug_metin = dk.yuzde(_dol.u_g) if _dol.araclar else f"%{plan.utilization:.1f}"
+
+    c1,c2,c2b,c3,c4,c5 = st.columns(6)
     c1.markdown(f'<div class="kpi-card"><div class="kpi-label">Araç</div>'
                 f'<div class="kpi-value">{n_tr}</div></div>', unsafe_allow_html=True)
-    c2.markdown(f'<div class="kpi-card"><div class="kpi-label">Doluluk</div>'
-                f'<div class="kpi-value">%{plan.utilization:.1f}</div></div>', unsafe_allow_html=True)
+    c2.markdown(f'<div class="kpi-card"><div class="kpi-label">Doluluk (hacim)</div>'
+                f'<div class="kpi-value">{_ug_metin}</div></div>', unsafe_allow_html=True)
+    c2b.markdown(f'<div class="kpi-card"><div class="kpi-label">Doluluk (ağırlık)</div>'
+                 f'<div class="kpi-value">{dk.yuzde(_dol.u_w)}</div></div>',
+                 unsafe_allow_html=True)
     c3.markdown(f'<div class="kpi-card"><div class="kpi-label">Yerleşen</div>'
                 f'<div class="kpi-value">{placed}/{total}</div></div>', unsafe_allow_html=True)
     c4.markdown(f'<div class="kpi-card"><div class="kpi-label">Toplam Ağırlık</div>'
                 f'<div class="kpi-value">{total_weight:,.0f} kg</div></div>', unsafe_allow_html=True)
     c5.markdown(f'<div class="kpi-card"><div class="kpi-label">Süre</div>'
                 f'<div class="kpi-value">{plan.execution_time:.2f}s</div></div>', unsafe_allow_html=True)
+    st.caption(f"{dk.ACIKLAMA_NOTU} Bu planda bağlayıcı ölçü: "
+               f"**{_dol.baglayici or '—'}**.")
+
+    # ── Lift-Top: tavan yükseltme inisiyatifi sonuca yansısın ───────────
+    _yukseltilen = [t for t in (trucks or [])
+                    if getattr(t, "tavan_yukseltildi", False)]
+    if _yukseltilen:
+        _ad = ", ".join(f"{t.id} ({t.yukseklik_min}→{t.height} cm)"
+                        for t in _yukseltilen)
+        st.success(
+            f"⬆️ **Tavan yükseltildi — {len(_yukseltilen)} araç:** {_ad}. "
+            f"Algoritma yeni araç açmak yerine ayarlanabilir tavanı "
+            f"kullandı, böylece araç sayısı artmadı.")
 
     # ── Overflow araç uyarısı ─────────────────────────────────────────────────
     if st.session_state.get("_overflow_used"):
@@ -1882,6 +2018,7 @@ def show_kpis(plan, pieces, trucks=None):
 
     # ── 1b. Araç başına doluluk ve dingil yükleri (R-a + D-b) ───────────────
     _show_fleet_report(plan, pieces, trucks)
+    _show_weight_distribution(plan, pieces, trucks)
 
     # ── 2. Özet tablo + düzeltme önerileri → tek kapalı expander ─────────────
     _ok_count  = sum(1 for r in _balance_rows if r[1] == "✅")
@@ -1971,19 +2108,38 @@ def show_3d(plan, pieces, trucks, show_truck, show_grid, show_weight, chart_key=
                 st.plotly_chart(fig, width="stretch", key=_k)
 
 
-def results_dict_from(all_results, pieces):
+def results_dict_from(all_results, pieces, trucks=None):
+    """Raporlara (reports.py) gidecek özet sözlük.
+
+    Doluluk ölçüleri `doluluk.py`'den gelir — burada formül YOK.
+    `utilization` alanı geriye dönük uyumluluk için U_G yüzdesidir.
+    """
+    import doluluk as dk
     total = sum(p.quantity for p in pieces)
-    return {
-        name: {
-            "utilization":    plan.utilization,
+    cikti = {}
+    for name, plan in all_results.items():
+        _d = dk.plan_doluluk(plan, pieces, trucks or [])
+        _ug = _d.u_g
+        cikti[name] = {
+            # U_G — ana ölçü (tanım değişmedi). Araç listesi yoksa planın
+            # kendi değerine düşer ki eski çağrılar bozulmasın.
+            "utilization":    (_ug * 100.0) if _ug is not None
+                              else plan.utilization,
+            "u_bb":           (_d.u_bb * 100.0) if _d.u_bb is not None else None,
+            "u_w":            (_d.u_w * 100.0) if _d.u_w is not None else None,
+            "baglayici":      _d.baglayici,
+            "yuk_kg":         _d.toplam_yuk_kg,
+            "faydali_yuk_kg": _d.toplam_faydali_yuk_kg,
+            "bos_agirlik_kg": _d.toplam_bos_agirlik_kg,
+            "arac_satirlari": dk.arac_satirlari(_d),
             "truck_count":    len([b for b in plan.bins if b]),
             "placed":         sum(len(b) for b in plan.bins),
             "total_req":      total,
             "total_weight":   sum(p.weight*p.quantity for p in pieces),
             "waste_cm3":      plan.total_waste,
             "execution_time": plan.execution_time,
-        } for name, plan in all_results.items()
-    }
+        }
+    return cikti
 
 
 def plan_rank(plan) -> tuple:
@@ -2018,7 +2174,8 @@ if page in ("🚀 Optimizasyon", "📦 Malzeme Yükleme"):
             "pros": v.get("pros", ""),
             "cons": v.get("cons", ""),
         }
-        for v in ALGORITHMS.values()
+        for k, v in ALGORITHMS.items()
+        if k not in DONDURULMUS_ALGORITMALAR
     }, ensure_ascii=False)
     _cmp.html(
         "<script>\n"
@@ -2167,16 +2324,24 @@ if page in ("🚀 Optimizasyon", "📦 Malzeme Yükleme"):
         # — Standart
         with t_std:
             if "df_pallets" not in st.session_state:
+                # ── Deneme yükü ─────────────────────────────────────
+                # Hepsi EUR/EPAL 1 tabanında (80×120 cm). Yükseklik ve
+                # ağırlık TOPLAMDIR: palet darası (14,4 cm / 25 kg) dâhil.
+                # Üç tip bir arada ki algoritmaların davranışı görünsün:
+                # ağır-alçak (ağırlık bağlar) · hafif-yüksek (hacim bağlar)
+                # · silindir (gerçek hacim πr²h ile dış kutu farkı).
                 st.session_state.df_pallets = pd.DataFrame({
-                    "ID":          ["Euro-1","Euro-2","Silindir-1"],
-                    "Şekil":       ["Dikdörtgen","Dikdörtgen","Silindir"],
-                    "Genişlik (cm)":[80,80,80],
-                    "Uzunluk (cm)":[120,120,80],
-                    "Yükseklik (cm)":[140,140,120],
-                    "Ağırlık (kg)":[250,180,300],
-                    "Adet":        [6,6,4],
-                    "Müşteri":     ["","",""],
-                    "Öncelik":     [None,None,None],
+                    "ID":           ["EUR-Agir", "EUR-Orta", "EUR-Hafif",
+                                     "EUR-Yuksek", "Silindir-1", "Kucuk-Kutu"],
+                    "Şekil":        ["Dikdörtgen", "Dikdörtgen", "Dikdörtgen",
+                                     "Dikdörtgen", "Silindir", "Dikdörtgen"],
+                    "Genişlik (cm)":[80, 80, 80, 80, 80, 60],
+                    "Uzunluk (cm)": [120, 120, 120, 120, 80, 80],
+                    "Yükseklik (cm)":[104, 134, 164, 224, 120, 94],
+                    "Ağırlık (kg)": [825, 525, 325, 225, 300, 145],
+                    "Adet":         [8, 10, 8, 4, 4, 12],
+                    "Müşteri":      ["A", "A", "B", "B", "C", "C"],
+                    "Öncelik":      [None, None, None, None, None, 1],
                 })
 
             # ── HAZIR PALET KÜTÜPHANESİ ──────────────────────────────────────
@@ -3074,7 +3239,10 @@ if page in ("🚀 Optimizasyon", "📦 Malzeme Yükleme"):
                 _, _best_cfg, _fleet_results = fleet_optimizer_3d(
                     pieces_3d, trucks_3d,
                     time_budget=max(15, int(auto_time_budget * 0.35)) if HAS_AUTO_OPT else 30,
-                    max_configs=200, packing_algo="auto", use_bayesian=True,
+                    max_configs=200, packing_algo="auto",
+                    # use_bayesian GEÇİLMİYOR: fleet_optimizer_3d içinde
+                    # zaten kullanılmıyor ("huni yeterli") ve BO karar A
+                    # ile yerleştirme akışlarından çıkarıldı.
                     progress_callback=_fs_cb,
                 )
                 if _best_cfg and _best_cfg.trucks:
@@ -3167,7 +3335,7 @@ if page in ("🚀 Optimizasyon", "📦 Malzeme Yükleme"):
 
         # (Sonuçlar koşu başında session_state'e bağlandı — artımlı birikti.)
         try:
-            _rdict_tmp  = results_dict_from(all_results, pieces_3d)
+            _rdict_tmp  = results_dict_from(all_results, pieces_3d, trucks_3d)
             _best_tmp   = max(all_results, key=lambda k: plan_rank(all_results[k]))
             st.session_state["last_rdict"]     = _rdict_tmp
             st.session_state["last_best_name"] = _best_tmp
@@ -3196,7 +3364,7 @@ if page in ("🚀 Optimizasyon", "📦 Malzeme Yükleme"):
 
         # Proje kaydet + rapor (ikincil — hata olsa da çalıştırma bozulmaz)
         try:
-            rdict = results_dict_from(all_results, pieces_3d)
+            rdict = results_dict_from(all_results, pieces_3d, trucks_3d)
             best_name = max(all_results, key=lambda k: plan_rank(all_results[k]))
             if project_name:
                 proj = db_mod.create_project(co["id"], user["id"], project_name, project_desc)
@@ -3319,7 +3487,7 @@ if page == "🚀 Optimizasyon" and "last_results" in st.session_state:
 
     else:
         # ── Karşılaştırma modu ───────────────────────────────────────────────
-        _rdict = results_dict_from(_all_results, _pieces_3d)
+        _rdict = results_dict_from(_all_results, _pieces_3d, _trucks_3d)
         _comp_rows = sorted(_rdict.items(), key=lambda x: -x[1]["utilization"])
         _best = _comp_rows[0][0]
 

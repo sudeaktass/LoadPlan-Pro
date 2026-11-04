@@ -321,28 +321,28 @@ def test_6c_e_varsayim_olarak_isaretli():
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# TEST 7 — U_V ile U_W ayrışması
+# TEST 7 — U_G ile U_W ayrışması
 # ═════════════════════════════════════════════════════════════════════════════
 
 def test_7a_agir_kucuk_yuk_agirlikta_doluyor():
     """Yoğun yük: ağırlık dolar, hacim boş kalır (Mackie & Harding 1982)."""
     a = AracDoluluk(etiket="ağır", gercek_hacim=10.0, arac_hacim=91.2,
                     yuk_kg=24_000.0, faydali_yuk_kg=25_757.0)
-    assert a.u_v == pytest.approx(0.1096, abs=0.001)
+    assert a.u_g == pytest.approx(0.1096, abs=0.001)
     assert a.u_w == pytest.approx(0.9318, abs=0.001)
-    assert a.u_w > a.u_v
+    assert a.u_w > a.u_g
 
 
 def test_7b_hafif_hacimli_yuk_hacimde_doluyor():
     a = AracDoluluk(etiket="hafif", gercek_hacim=85.0, arac_hacim=91.2,
                     yuk_kg=3_000.0, faydali_yuk_kg=25_757.0)
-    assert a.u_v == pytest.approx(0.9320, abs=0.001)
+    assert a.u_g == pytest.approx(0.9320, abs=0.001)
     assert a.u_w == pytest.approx(0.1165, abs=0.001)
-    assert a.u_v > a.u_w
+    assert a.u_g > a.u_w
 
 
 def test_7c_toplam_oran_arac_ortalamasindan_ayrisiyor():
-    """Heterojen filoda U_V toplam oranı ile araç ortalaması farklıdır."""
+    """Heterojen filoda U_G toplam oranı ile araç ortalaması farklıdır."""
     plan = PlanDoluluk(araclar=[
         AracDoluluk(etiket="büyük", gercek_hacim=80.0, arac_hacim=91.2,
                     yuk_kg=20_000.0, faydali_yuk_kg=25_757.0,
@@ -351,13 +351,13 @@ def test_7c_toplam_oran_arac_ortalamasindan_ayrisiyor():
                     yuk_kg=2_000.0, faydali_yuk_kg=12_000.0,
                     bos_agirlik_kg=9_000.0),
     ])
-    toplam = plan.u_v                     # 90 / 131,2
-    ortalama = plan.u_v_ortalama          # (0,877 + 0,250) / 2
+    toplam = plan.u_g                     # 90 / 131,2
+    ortalama = plan.u_g_ortalama          # (0,877 + 0,250) / 2
     assert toplam == pytest.approx(90.0 / 131.2, abs=0.001)
     assert ortalama == pytest.approx((80 / 91.2 + 10 / 40) / 2, abs=0.001)
     assert abs(toplam - ortalama) > 0.05, "ayrışma görünür olmalı"
 
-    assert plan.u_v_en_dusuk == pytest.approx(0.25, abs=0.001)
+    assert plan.u_g_en_dusuk == pytest.approx(0.25, abs=0.001)
     assert plan.arac_sayisi == 2
     # Toplam boş ağırlık YALNIZ raporlanır (K1'in 2. ölçütü karara bağlı değil)
     assert plan.toplam_bos_agirlik_kg == pytest.approx(23_243.0)
@@ -366,9 +366,9 @@ def test_7c_toplam_oran_arac_ortalamasindan_ayrisiyor():
 def test_7d_sifir_payda_none_donuyor():
     a = AracDoluluk(gercek_hacim=5.0, arac_hacim=0.0,
                     yuk_kg=100.0, faydali_yuk_kg=0.0)
-    assert a.u_v is None
+    assert a.u_g is None
     assert a.u_w is None
-    assert PlanDoluluk(araclar=[]).u_v is None
+    assert PlanDoluluk(araclar=[]).u_g is None
 
 
 # ═════════════════════════════════════════════════════════════════════════════

@@ -498,16 +498,17 @@ class HybridPipeline:
             PipelineStage("Genetic",
                           {"population_size": 60, "generations": 100},
                           label="3. Genetic"),
-            # FIX-M3: Island GA eklendi — Genetic'ten daha iyi çeşitlilik
-            PipelineStage("IslandGA",
-                          {"n_islands": 4, "island_population": 20, "generations": 60},
-                          label="4. Island GA"),
+            # KARAR A (22 Ekim 2026): Island GA aşaması ORKESTRASYONDAN
+            # ÇIKARILDI. Yerleştirme algoritması olarak kullanılmıyor.
+            # Aşama tanımı ve `_calistir` içindeki "IslandGA" dalı
+            # SİLİNMEDİ; varyant analizi için elle kurulan bir boru
+            # hattına eklenebilir, ama VARSAYILAN hatta yer almaz.
             PipelineStage("SimulatedAnnealing",
                           {"max_time": 40.0, "cooling_rate": 0.996},
-                          label="5. SA"),
+                          label="4. SA"),
             PipelineStage("TabuSearch",
                           {"max_iterations": 400, "max_time": 30.0},
-                          label="6. Tabu"),
+                          label="5. Tabu"),
         ]
         return cls(pieces, trucks, stages=stages, **kwargs)
 

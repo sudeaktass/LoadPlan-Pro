@@ -120,8 +120,32 @@ class Truck3D:
     available: int
     eslesme: Optional[object] = None
 
+    # ── Ayarlanabilir tavan (Lift-Top) ──────────────────────────────────
+    # `height` AKTİF yüksekliktir ve tavan kaldırılınca BÜYÜR.
+    # `yukseklik_min` normal (indirilmiş) hâli, `yukseklik_max` kaldırılmış
+    # hâlidir. İkisi de None ise araç sabit tavanlıdır ve davranış
+    # eskisiyle birebir aynıdır.
+    yukseklik_min: Optional[int] = None
+    yukseklik_max: Optional[int] = None
+    tavan_yukseltildi: bool = False
+
     def get_volume(self) -> int:
+        """AKTİF yüksekliğe göre iç hacim.
+
+        Tavan kaldırıldıysa hacim de büyür; doluluk paydası bu yüzden
+        kendiliğinden doğru kalır (yoksa tavanı kaldırınca doluluk yapay
+        olarak düşerdi).
+        """
         return self.width * self.length * self.height
+
+    @property
+    def aktif_yukseklik(self) -> int:
+        return self.height
+
+    @property
+    def tavan_ayarlanabilir(self) -> bool:
+        return (self.yukseklik_max is not None
+                and self.yukseklik_max > (self.yukseklik_min or self.height))
 
 
 @dataclass
@@ -872,10 +896,27 @@ def piece_used_volume(placement, piece_info):
 _objective_used_volume = piece_used_volume
 
 
+YENI_AMAC = True
+"""Hangi amaç fonksiyonu kullanılsın?
+
+  True  : `amac_fonksiyonu.py` — üç düzeyli yapı (Deb kısıtı → araç
+          sayısı → Falkenauer doluluk + öncelik + CoG). 22 Ekim 2026.
+  False : bu dosyadaki eski ağırlıklı toplam.
+
+Eski sürüm SİLİNMEDİ çünkü yeni yapı beş metasezgiselin davranışını
+değiştiriyor; önceki deney koşularıyla karşılaştırma yapılabilsin diye
+aynı kod tabanında durması gerekiyor. Deneyde bu bayrak çevrilir.
+"""
+
+
 def packing_objective(bins_list, truck_assignments, trucks, piece_info,
                       unplaced: int = 0, overflow_bins: int = 0):
     """
     TÜM algoritmalar için ortak amaç fonksiyonu. DÜŞÜK = DAHA İYİ.
+
+    Formül BURADA DEĞİL, `amac_fonksiyonu.py`'de (YENI_AMAC açıkken).
+    Böylece beş metasezgisel aynı hedefi optimize eder ve tanım tek
+    yerde yaşar.
 
     Args:
         bins_list        : List[List[Placement3D]] — her bin'in yerleşimleri
@@ -887,6 +928,22 @@ def packing_objective(bins_list, truck_assignments, trucks, piece_info,
 
     Returns:
         (fitness, utilization)  — fitness düşük = iyi; utilization yüzde
+    """
+    if YENI_AMAC:
+        from amac_fonksiyonu import amac
+        return amac(bins_list, truck_assignments, trucks, piece_info,
+                    unplaced, overflow_bins)
+    return _eski_packing_objective(bins_list, truck_assignments, trucks,
+                                   piece_info, unplaced, overflow_bins)
+
+
+def _eski_packing_objective(bins_list, truck_assignments, trucks, piece_info,
+                            unplaced: int = 0, overflow_bins: int = 0):
+    """4 Eylül 2026 sürümü — ağırlıklı toplam. YALNIZCA KARŞILAŞTIRMA İÇİN.
+
+    Bilinen üç sorunu (ölçekler uyumsuz; doluluk araç sayısını eziyor;
+    CoG cezası fazladan araç satın alabiliyor) `amac_fonksiyonu.py`
+    başlığında anlatılıyor. Buraya dokunmayın.
     """
     from priority_utils import priority_violation_penalty  # lazy: döngüsel import önlenir
 

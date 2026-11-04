@@ -107,6 +107,34 @@ class ExtremePoints3D:
         self._dingil = izleyici_olustur(truck)
 
     # ------------------------------------------------------------------
+    # Ayarlanabilir tavan (Lift-Top)
+    # ------------------------------------------------------------------
+    # `self.height` motorda YALNIZCA SINIR olarak kullanılıyor (z + h >
+    # height kontrolü ve skorlamadaki normalizasyon). Yerleştirilmiş
+    # parçalar zaten eski tavanın altında olduğu için tavanı koşu
+    # ortasında yükseltmek çakışma ve destek mantığını BOZMAZ.
+
+    def tavani_yukselt(self, yeni_yukseklik: int) -> bool:
+        """Tavanı yükselt. Yalnız BÜYÜTÜR; küçültmek için tavani_indir."""
+        yeni_yukseklik = int(yeni_yukseklik)
+        if yeni_yukseklik <= self.height:
+            return False
+        self.height = yeni_yukseklik
+        return True
+
+    def tavani_indir(self, yeni_yukseklik: int) -> bool:
+        """Tavanı indir — yalnız mevcut yerleşimler altında kalıyorsa.
+
+        Deneme başarısız olduğunda tavanı eski hâline döndürmek için.
+        """
+        yeni_yukseklik = int(yeni_yukseklik)
+        gereken = max((p.z + p.height for p in self.placements), default=0)
+        if yeni_yukseklik < gereken:
+            return False
+        self.height = yeni_yukseklik
+        return True
+
+    # ------------------------------------------------------------------
     # PUBLIC: MaxRects3D uyumlu arayüz
     # ------------------------------------------------------------------
 

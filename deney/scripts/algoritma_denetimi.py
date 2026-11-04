@@ -78,6 +78,16 @@ def parmak_izi(plan):
     return hashlib.sha256("\n".join(kayitlar).encode()).hexdigest()[:16]
 
 
+def _plan_amaci(plan, pieces, trucks) -> float:
+    """Planın ortak amaç değeri (DÜŞÜK = daha iyi).
+
+    Algoritmaların fiilen optimize ettiği ölçü budur; denetimin
+    "tohumdan kötü" kararı da buna bakmalıdır.
+    """
+    from amac_fonksiyonu import plan_uygunlugu
+    return plan_uygunlugu(plan, trucks, {p.id: p for p in pieces})
+
+
 def kosucular(butce):
     """(ad, stokastik, tohumlu_cagri, tohumsuz_cagri)"""
     from tabu_search_3d import tabu_search_3d_optimization as TS
@@ -230,8 +240,17 @@ def main():
             fark = m_a["U_G"] - ffd_util
             ayni = "EVET" if iz_a == ffd_iz else "hayır"
             isaret = ""
-            if fark < -0.01:
-                isaret = "  ← TOHUMDAN KÖTÜ"
+            # DÜZELTME (22 Ekim 2026): "tohumdan kötü" uyarısı U_G'ye
+            # bakıyordu, oysa algoritmalar ORTAK AMAÇ FONKSİYONUNU
+            # optimize ediyor (araç sayısı > yerleşmeyen parça > doluluk).
+            # Daha çok parça yerleştirip U_G'si düşen bir çözüm AMACA GÖRE
+            # daha iyidir ama eski ölçüt onu kusur sayıyordu — yanlış alarm.
+            # Uyarı artık ortak ölçüyle verilir; U_G sütunu bilgi olarak kalır.
+            amac_a = _plan_amaci(plan_a, pieces, trucks)
+            amac_tohum = _plan_amaci(ffd_plan, pieces, trucks)
+            amac_farki = amac_a - amac_tohum          # DÜŞÜK = daha iyi
+            if amac_farki > 1e-9:
+                isaret = "  ← TOHUMDAN KÖTÜ (amaç)"
             elif iz_a == ffd_iz:
                 isaret = "  ← tohumu aynen döndürdü"
 

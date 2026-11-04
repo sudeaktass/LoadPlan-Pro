@@ -2,15 +2,15 @@
 
 **3B Konteyner / Palet Yükleme Optimizasyonu için Karar Destek Sistemi**
 
-LoadPlan Pro, farklı boyut, ağırlık ve kısıtlara sahip yükleri araçlara/konteynerlere **en verimli ve fiziksel olarak uygulanabilir** biçimde yerleştiren bir 3B Bin-Packing (3D-KPP) optimizasyon aracıdır. On farklı algoritmayı aynı çatı altında karşılaştırmalı olarak sunar; sonuçları etkileşimli 3B görselleştirme, Excel/PDF raporları ve sürücü yükleme talimatlarıyla destekler.
+LoadPlan Pro, farklı boyut, ağırlık ve kısıtlara sahip yükleri araçlara/konteynerlere **en verimli ve fiziksel olarak uygulanabilir** biçimde yerleştiren bir 3B Bin-Packing (3D-KPP) optimizasyon aracıdır. Yedi algoritmayı aynı çatı altında karşılaştırmalı olarak sunar; sonuçları etkileşimli 3B görselleştirme, Excel/PDF raporları ve sürücü yükleme talimatlarıyla destekler.
 
-> Streamlit tabanlı web arayüzü · 10 algoritma · çok kısıtlı yerleştirme · alt-sınır (optimallik açığı) analizi · bağımsız olurluluk doğrulaması
+> Streamlit tabanlı web arayüzü · 7 algoritma · çok kısıtlı yerleştirme · ortak amaç fonksiyonu · alt-sınır (optimallik açığı) analizi · bağımsız olurluluk doğrulaması
 
 ---
 
 ## ✨ Özellikler
 
-- **10 optimizasyon algoritması** — yapıcı sezgiseller + metasezgiseller (aşağıda)
+- **7 optimizasyon algoritması** — yapıcı sezgiseller + metasezgiseller (aşağıda)
 - **Manuel & Karşılaştırmalı mod** — tek algoritma çalıştır ya da hepsini yan yana kıyasla
 - **Otomatik Araç Seçimi** — filodan en uygun araç kombinasyonunu bulur
 - **Çok-kısıtlı yerleştirme** — ağırlık kapasitesi, boyut, istif, ağırlık merkezi (CoG), öncelik/LIFO, minimum aralık, rotasyon
@@ -40,12 +40,34 @@ LoadPlan Pro, farklı boyut, ağırlık ve kısıtlara sahip yükleri araçlara/
 | **Tabu Search** | Bellek tabanlı yerel arama (tabu + frekans) | Glover & Laguna (1997) |
 | **Simulated Annealing** | Fiziksel tavlama + Metropolis kabul | Kirkpatrick (1983) |
 | **Genetic Algorithm** | Evrimsel (OX1 çaprazlama, indeks kodlama) | Holland (1975) |
-| **Island GA** | Paralel ada modeli + halka göçü | Tanese (1989) |
 | **Monte Carlo (RCS)** | Rastgele yapıcı arama + importance sampling | Rubinstein & Kroese (2004) |
-| **Multi-Start SA** | Çeşitlendirilmiş çoklu başlangıç + SA | Martí (2003) |
-| **Bayesian Optimization** | TPE vekil model (hiperparametre ayarı) | Bergstra vd. (2011) |
 
 Tüm metasezgiseller **ortak Extreme Points (EP) yerleştirme motorunu** ve **ortak amaç fonksiyonunu** kullanır — adil karşılaştırma için. (Crainic, Perboli & Tadei, 2008)
+
+### Dondurulmuş varyantlar (karar A)
+
+**Island GA**, **Multi-Start SA** ve **Bayesian Optimization** yerleştirme
+algoritması olarak **kullanılmaz**: kullanıcıya açık seçim listelerinden,
+açıklama kartından, `run_algo` sevk tablosundan ve varsayılan orkestrasyon
+boru hattından çıkarıldılar.
+
+Kodları **silinmedi** — `island_genetic_3d.py`, `multistart_sa_3d.py` ve
+`bayesian_optimizer_3d.py` olduğu gibi duruyor ve varyant analizi için
+doğrudan import edilip çağrılabilir (`deney/scripts/algoritma_denetimi.py`
+bunu yapar).
+
+---
+
+## 🎯 Ortak Amaç Fonksiyonu
+
+Beş metasezgisel aynı hedefi optimize eder (`amac_fonksiyonu.py`). Dört
+düzey; üstteki alttakini **her zaman** yener:
+
+1. **Geçersizlik** — yerleşmeyen parça, filo tavanı aşımı, dingil yükü ihlali
+   (Deb 2000 kısıt-baskın kuralı)
+2. **Araç sayısı** — az sefer her zaman iyidir (K1'in birinci ölçütü)
+3. **Ağırlık merkezi toleransı** — yanal %10 · boylamsal %15 · dikey %60
+4. **Sürekli ölçütler** — doluluk (Falkenauer 1996 biçimi) · öncelik · CoG
 
 ---
 
@@ -64,11 +86,14 @@ pip install -r requirements.txt
 
 # 4. (Opsiyonel) İleri özellikler
 pip install scipy               # deneysel analiz (Friedman/Wilcoxon)
-pip install optuna              # Bayesian Optimization
+pip install optuna              # Bayesian Optimization (dondurulmuş varyant)
 pip install "qrcode[pil]"       # Sürücü talimatı QR kodları
 ```
 
-**Ana bağımlılıklar:** `streamlit · plotly · pandas · numpy · reportlab · openpyxl · sqlalchemy · bcrypt · trimesh · shapely`
+**Ana bağımlılıklar:** `streamlit · plotly · matplotlib · pandas · numpy · reportlab · openpyxl · sqlalchemy · bcrypt · trimesh · shapely`
+
+> `matplotlib` zorunludur — `app_3d.py` backend'i sabitlemek için onu
+> koşulsuz import eder. `requirements.txt` ile birlikte kurulur.
 
 ---
 
@@ -108,6 +133,21 @@ Tarayıcıda `http://localhost:8501` açılır.
 ├── multistart_sa_3d.py        # Multi-Start SA
 ├── bayesian_optimizer_3d.py   # Bayesian Optimization (TPE)
 │
+├── amac_fonksiyonu.py         # ORTAK AMAÇ FONKSİYONU (tek kaynak)
+├── doluluk.py                 # Doluluk ölçüleri: hacim (U_G) + ağırlık (U_W)
+├── agirlik_dagilimi.py        # Ağırlık merkezi & yayılma ölçümü (cm)
+├── yukleme_sirasi.py          # Yükleme sırası (sürücü talimatı + 3B rozetler)
+│
+├── filo_modeli.py             # Çekici + dorse veri modeli (KTY md.128)
+├── filo_havuzu.py             # Ortak araç açma (filo = tavan)
+├── filo_sayfasi.py            # 🚚 Filo sayfası (arayüz)
+├── filo_excel.py              # Filo için Excel şablon / içe-dışa aktarım
+├── filo_secimi.py             # Kalıcı filo seçimi
+├── dingil_yuku.py             # Dingil yükü hesabı (Pollaris kaldıraç kuralı)
+├── mevzuat_kty.py             # Karayolları Taşıma Yönetmeliği sınırları
+├── palet_kutuphanesi.py       # Standart palet kütüphanesi (EUR/EPAL, ISO 6780)
+├── ornek_filo.py              # Örnek araç tanımları
+│
 ├── fleet_optimizer_3d.py      # Otomatik araç seçimi
 ├── bounds_3d.py               # Alt-sınır & optimallik açığı
 ├── priority_utils.py          # Öncelik/LIFO bölge yönetimi
@@ -140,10 +180,16 @@ Tarayıcıda `http://localhost:8501` açılır.
 ## ✅ Doğrulama & Geçerleme (V&V)
 
 ```bash
-python test_algoritma_uygunlugu.py   # Algoritmalar kanonik tanımlarına uyuyor mu? (27 test)
-python dogrula_cozum.py              # Çözümler fiziksel olarak olurlu mu? (bağımsız kontrol)
-python deney_kosumu.py               # Karşılaştırmalı deney + Friedman/Wilcoxon + gap
+python -m pytest -q                        # Birim + davranış testleri (474 test)
+python test_algoritma_uygunlugu.py         # Algoritmalar kanonik tanımına uyuyor mu? (27 test)
+python dogrula_cozum.py                    # Çözümler fiziksel olarak olurlu mu?
+python deney_kosumu.py                     # Karşılaştırmalı deney + Friedman/Wilcoxon + gap
+python deney/scripts/algoritma_denetimi.py --n 2 --butce 4
+                                           # Parmak izi · tohumlu/tohumsuz · tohuma göre kayıp
 ```
+
+Testler `deney/` altındaki kıyas kümelerini (Bischoff & Ratcliff 1995;
+Davies & Bischoff 1999; Loh & Nee 1992; Ivancic vd. 1989) kullanır.
 
 ---
 
@@ -152,7 +198,7 @@ python deney_kosumu.py               # Karşılaştırmalı deney + Friedman/Wil
 - **Arayüz:** Streamlit
 - **Görselleştirme:** Plotly (3B), Matplotlib
 - **Veri:** pandas, NumPy, SciPy
-- **Optimizasyon:** özel algoritma implementasyonları + Optuna (TPE)
+- **Optimizasyon:** özel algoritma implementasyonları (Optuna yalnız dondurulmuş BO varyantında)
 - **Geometri/CAD:** trimesh, Shapely (STL/STEP, NFP nesting)
 - **Raporlama:** ReportLab (PDF), openpyxl (Excel), qrcode
 - **Kalıcılık:** SQLAlchemy (SQLite/PostgreSQL), bcrypt

@@ -184,6 +184,17 @@ class Dorse:
     bos_dingil_grubu_payi_kg: Optional[float] = None
     bos_payi_kaynagi: str = ""                 # "föy" | "elle" | "" (boş → varsayım)
 
+    # ── ayarlanabilir tavan (Lift-Top) ──
+    # Mega dorselerde kaldırılabilir tavan (Hubdach) standart bir donanımdır.
+    # `ic_yukseklik_mm` NORMAL (asgari) yüksekliktir; tavan kaldırılınca
+    # `yukseklik_max_mm`e kadar çıkılabilir. Algoritma ikinci bir araç
+    # açmak zorunda kalmadan önce bu payı dener (bkz. filo_havuzu).
+    ayarlanabilir_tavan: bool = False
+    yukseklik_max_mm: Optional[float] = None
+    # Tavan kaldırılınca DIŞ yükseklik de artar; KTY md.128 sınırı 4,00 m.
+    # Bu alan doluysa yükseltme o sınırı aşacaksa reddedilir.
+    dis_yukseklik_mm: Optional[float] = None
+
     # ── isteğe bağlı ──
     teknik_azami_kg: Optional[float] = None
     iso_40ft_konteyner: bool = False
@@ -204,6 +215,21 @@ class Dorse:
     def ic_hacim_m3(self) -> float:
         """İç hacim (m³) — hesaplanır, girilmez."""
         return self.ic_hacim_mm3 / 1_000_000_000.0
+
+    @property
+    def yukseklik_min_mm(self) -> float:
+        """Tavan indirilmişken iç yükseklik — normal hâli."""
+        return float(self.ic_yukseklik_mm)
+
+    @property
+    def tavan_payi_mm(self) -> float:
+        """Tavan kaldırılarak kazanılabilecek ek yükseklik (mm).
+
+        Ayarlanabilir tavan kapalıysa ya da azami yükseklik girilmemişse 0.
+        """
+        if not self.ayarlanabilir_tavan or self.yukseklik_max_mm is None:
+            return 0.0
+        return max(0.0, float(self.yukseklik_max_mm) - self.yukseklik_min_mm)
 
     @property
     def c_mm(self) -> Optional[float]:
@@ -298,6 +324,16 @@ class Dorse:
                     f"Dingil grubunun orta dingili yük alanının dışında "
                     f"çıkıyor (c + d = {grup_merkezi:.0f} mm > iç uzunluk "
                     f"{self.ic_uzunluk_mm:.0f} mm). Ölçüleri kontrol edin.")
+        if self.ayarlanabilir_tavan:
+            if self.yukseklik_max_mm is None:
+                uyarilar.append(
+                    "Tavan yükseltilebilir işaretli ama azami iç yükseklik "
+                    "girilmemiş — yükseltme yapılamaz.")
+            elif self.yukseklik_max_mm <= self.ic_yukseklik_mm:
+                uyarilar.append(
+                    f"Azami iç yükseklik ({self.yukseklik_max_mm:.0f} mm) "
+                    f"normal iç yükseklikten ({self.ic_yukseklik_mm:.0f} mm) "
+                    f"büyük olmalı.")
         if self.teknik_azami_kg is not None and \
                 self.teknik_azami_kg <= self.bos_agirlik_kg:
             uyarilar.append(
