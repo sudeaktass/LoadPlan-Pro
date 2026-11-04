@@ -96,6 +96,8 @@ def island_genetic_3d_optimization(
 
     best_score = float('-inf')
     best_plan_data = None
+    _son_goc_zamani = time.time()   # süre tetikleyicisi için
+
     fitness_cache: Dict[Tuple[int, ...], Tuple[float, dict]] = {}
     _CACHE_MAX = 50_000   # sınırsız büyüme (bellek) freni
 
@@ -197,8 +199,27 @@ def island_genetic_3d_optimization(
                     new_pop.append(c2)
             islands[island_idx] = new_pop
 
-        # Ring migration (süre dolmuşsa atla — çıkışa gidiliyor)
-        if not _time_up and (gen + 1) % migration_interval == 0 and n_islands > 1:
+        # ── Ring migration ───────────────────────────────────────────────
+        # ÖLÇÜLEN SORUN: tetikleyici yalnız NESİL SAYISIYDI. Zaman bütçeli
+        # koşuda (uygulamanın ve kıyas düzeninin varsayılanı) 112 parçalık
+        # örnekte 4 sn'de ancak 2 nesil tamamlanıyor; `migration_interval=10`
+        # olduğu için GÖÇ HİÇ GERÇEKLEŞMİYORDU (ölçüldü: 0 göç). Göç, ada
+        # modelini standart GA'dan ayıran TEK mekanizmadır; devreye
+        # girmeyince Ada GA fiilen GA'ya çöküyor ve ikisi aynı çözümü
+        # üretiyordu (denetimde 4/4 aynı parmak izi).
+        #
+        # Çözüm: zaman bütçesi verildiğinde nesil tetikleyicisinin YANINA
+        # bir süre tetikleyicisi eklenir — bütçe ~4 göç turuna bölünür.
+        # `migration_interval` dış arayüzde aynen kalır; bütçesiz
+        # (max_time <= 0) koşuda davranış değişmez.
+        _nesil_tetik = (gen + 1) % migration_interval == 0
+        _sure_tetik = False
+        if max_time > 0 and n_islands > 1:
+            _goc_araligi = max_time / 4.0
+            if (time.time() - _son_goc_zamani) >= _goc_araligi:
+                _sure_tetik = True
+        if not _time_up and (_nesil_tetik or _sure_tetik) and n_islands > 1:
+            _son_goc_zamani = time.time()
             migrants_per_island = []
             for pop in islands:
                 scored_pop = []

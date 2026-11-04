@@ -508,13 +508,11 @@ def _add_loading_sheet(wb, sheet_title: str, project_name: str,
         ws_lt.row_dimensions[current_row].height = 18
         current_row += 1
 
-        # Yükleme sırası: kabin tarafı (Y=0) önce → kapıya ilerle (LIFO)
-        sorted_placements = sorted(
-            bin_placements,
-            key=lambda pl: (_gp(pl, "y", 0), _gp(pl, "z", 0), _gp(pl, "x", 0)),
-        )
-
-        for seq, pl in enumerate(sorted_placements, 1):
+        # Yükleme sırası: kural `yukleme_sirasi.py`'de — burada kopyası YOK.
+        # (Eskiden bu satırda ayrı bir sorted(...) vardı; sürücü PDF'iyle
+        #  farklı numara üretme riski taşıyordu.)
+        from yukleme_sirasi import sirali
+        for seq, pl in sirali(bin_placements):
             pid = _gp(pl, "piece_id", "—") or "—"
             px, py, pz = _gp(pl, "x", 0), _gp(pl, "y", 0), _gp(pl, "z", 0)
             pw, pln, pht = _gp(pl, "width", 0), _gp(pl, "length", 0), _gp(pl, "height", 0)
@@ -947,33 +945,16 @@ def _make_qr_image(data: str, size_cm: float = 1.2) -> "Optional[object]":
 
 
 def _compute_loading_order(placements: List[dict]) -> List[int]:
-    """
-    Yükleme sırası (fiziksel satır-katman mantığı).
+    """Yükleme sırası — kural `yukleme_sirasi.py`'de, BURADA DEĞİL.
 
-    EKSEN KONVANSİYONU: Kapı Y = maks (uzunluk) tarafındadır; priority=1
-    bölgesi (y >= 0.70·L) "kapıya en yakın"dır. Yükleme kapıdan yapıldığı
-    için ilk ürün kapıdan EN UZAK noktaya (kabin tarafı, Y=0) yerleşir:
-      1) Y artan   — kabin tarafından başla (kapıdan uzak = önce yükle)
-      2) Z artan   — o satırın alt katmanı önce, üst katmanı hemen ardından
-      3) X artan   — aynı Y+Z seviyesinde soldan sağa (tiebreaker)
-
-    Sonuç: kabin tarafı alt katman → üst katman → bir sıra kapıya doğru →
-           … → kapıya en yakın (öncelikli) ürün EN SON yüklenir (LIFO).
+    Sürücü PDF'i, Excel talimat sayfası ve 3B görsel aynı numarayı
+    göstersin diye tek kaynaktan okunur.
 
     Returns:
-        placements listesinin her elemanı için sıra numarası (1-based) listesi
+        placements listesinin her elemanı için sıra numarası (1-based).
     """
-    indexed = list(enumerate(placements))
-    indexed.sort(key=lambda ix: (
-         ix[1].get("y", 0),    # kabin tarafı önce (kapıdan uzak)
-         ix[1].get("z", 0),    # alt katman önce
-         ix[1].get("x", 0),    # soldan sağa tiebreaker
-    ))
-    # Sıra numarası map'i: orig_index → load_order (1-based)
-    order_map = {}
-    for load_order, (orig_index, _) in enumerate(indexed, start=1):
-        order_map[orig_index] = load_order
-    return [order_map[i] for i in range(len(placements))]
+    from yukleme_sirasi import sira_numaralari
+    return sira_numaralari(placements)
 
 
 def generate_loading_sheet_pdf(

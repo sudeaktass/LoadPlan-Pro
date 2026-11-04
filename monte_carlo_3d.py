@@ -174,9 +174,17 @@ def monte_carlo_3d_optimization(
         piece_list.extend([piece] * piece.quantity)
     total_pieces = len(piece_list)
 
-    # [KORUNDU] Başlangıç seed
-    best_plan  = initial_solution if initial_solution else None
-    best_score = initial_solution.utilization if initial_solution else float('-inf')
+    # ── Başlangıç tohumu ────────────────────────────────────────────────
+    # DÜZELTME (22 Ekim 2026): burada eskiden `initial_solution.utilization`
+    # (yüzde, ~55) kullanılıyordu, ama döngüdeki denemeler
+    # `calculate_trial_score_3d` ile puanlanıyor (-packing_objective).
+    # İki FARKLI ÖLÇEK karşılaştırıldığı için `score > best_score` hiçbir
+    # zaman doğru olmuyordu: tohum verildiğinde (uygulama her zaman FFD
+    # tohumu veriyor) MC aramayı boşa harcayıp FFD planını aynen geri
+    # döndürüyordu. Artık tohum da aynı fonksiyonla puanlanıyor.
+    best_plan = initial_solution if initial_solution else None
+    best_score = (_plan_skoru(initial_solution, trucks, piece_info)
+                  if initial_solution else float('-inf'))
 
     # [EKLENDİ] İstatistik takibi — Talbi (2009) değerlendirme standardı
     trial_scores: List[float] = []
@@ -374,6 +382,18 @@ def pack_trial_3d(
             unfitted_count += 1
 
     return placements_by_bin, truck_assignments, unfitted_count
+
+
+def _plan_skoru(plan, trucks, piece_info) -> float:
+    """Hazır bir planı, denemelerle AYNI ölçekte puanlar (YÜKSEK = iyi).
+
+    Ölçü `amac_fonksiyonu.plan_uygunlugu` — tek resmî kaynak; burada
+    yalnızca işaret çevrilir, çünkü MC yüksek skoru iyi sayar.
+    """
+    from amac_fonksiyonu import plan_uygunlugu
+
+    uygunluk = plan_uygunlugu(plan, trucks, piece_info)
+    return float("-inf") if uygunluk == float("inf") else -uygunluk
 
 
 def calculate_trial_score_3d(

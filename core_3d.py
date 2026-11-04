@@ -896,10 +896,27 @@ def piece_used_volume(placement, piece_info):
 _objective_used_volume = piece_used_volume
 
 
+YENI_AMAC = True
+"""Hangi amaç fonksiyonu kullanılsın?
+
+  True  : `amac_fonksiyonu.py` — üç düzeyli yapı (Deb kısıtı → araç
+          sayısı → Falkenauer doluluk + öncelik + CoG). 22 Ekim 2026.
+  False : bu dosyadaki eski ağırlıklı toplam.
+
+Eski sürüm SİLİNMEDİ çünkü yeni yapı beş metasezgiselin davranışını
+değiştiriyor; önceki deney koşularıyla karşılaştırma yapılabilsin diye
+aynı kod tabanında durması gerekiyor. Deneyde bu bayrak çevrilir.
+"""
+
+
 def packing_objective(bins_list, truck_assignments, trucks, piece_info,
                       unplaced: int = 0, overflow_bins: int = 0):
     """
     TÜM algoritmalar için ortak amaç fonksiyonu. DÜŞÜK = DAHA İYİ.
+
+    Formül BURADA DEĞİL, `amac_fonksiyonu.py`'de (YENI_AMAC açıkken).
+    Böylece beş metasezgisel aynı hedefi optimize eder ve tanım tek
+    yerde yaşar.
 
     Args:
         bins_list        : List[List[Placement3D]] — her bin'in yerleşimleri
@@ -911,6 +928,22 @@ def packing_objective(bins_list, truck_assignments, trucks, piece_info,
 
     Returns:
         (fitness, utilization)  — fitness düşük = iyi; utilization yüzde
+    """
+    if YENI_AMAC:
+        from amac_fonksiyonu import amac
+        return amac(bins_list, truck_assignments, trucks, piece_info,
+                    unplaced, overflow_bins)
+    return _eski_packing_objective(bins_list, truck_assignments, trucks,
+                                   piece_info, unplaced, overflow_bins)
+
+
+def _eski_packing_objective(bins_list, truck_assignments, trucks, piece_info,
+                            unplaced: int = 0, overflow_bins: int = 0):
+    """4 Eylül 2026 sürümü — ağırlıklı toplam. YALNIZCA KARŞILAŞTIRMA İÇİN.
+
+    Bilinen üç sorunu (ölçekler uyumsuz; doluluk araç sayısını eziyor;
+    CoG cezası fazladan araç satın alabiliyor) `amac_fonksiyonu.py`
+    başlığında anlatılıyor. Buraya dokunmayın.
     """
     from priority_utils import priority_violation_penalty  # lazy: döngüsel import önlenir
 

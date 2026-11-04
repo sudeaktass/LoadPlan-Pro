@@ -43,7 +43,8 @@ from core_3d import (
 )
 from filo_havuzu import arac_sirala
 from tabu_search_3d import (
-    TSSolution, evaluate_solution,
+    BinOnbellegi, TSSolution, evaluate_solution, en_iyi_baslangic,
+    tohum_korumasi,
     _create_initial_solution, _plan_to_ts_solution, _max_allowed_bins
 )
 
@@ -154,13 +155,45 @@ def _cycle_shift_neighbor(solution: TSSolution,
 
 # ─── KOMŞULUK ÜRETİMİ ────────────────────────────────────────────────────────
 
+def _reorder_neighbor(solution: TSSolution) -> Optional[TSSolution]:
+    """Bin-İÇİ yükleme sırası değişimi — iki parçanın yerini değiştirir.
+
+    `evaluate_solution` her bin'in `piece_orders` dizisini yerleştirme
+    SIRASI olarak kullandığı için bu, farklı bir yerleşim üretir.
+
+    Gerekçe (Eley 2002, EJOR 141:393-409 — elimizdeki tam metin): açgözlü
+    çözümü iyileştirmek için "farklı ürün yükleme sıralarını" araştıran
+    bir ağaç araması kurulur; yükleme sırası CLP'de açık bir arama
+    değişkenidir. Diğer üç operatör (relocate / swap / cycle_shift)
+    yalnız binler ARASI çalıştığı için tek konteynerli örneklerde
+    komşuluk boş kalıyordu.
+    """
+    aday = [b for b, sira in solution.piece_orders.items() if len(sira) >= 2]
+    if not aday:
+        return None
+    b = random.choice(aday)
+    yeni = solution.copy()
+    sira = yeni.piece_orders[b]
+    i, j = random.sample(range(len(sira)), 2)
+    sira[i], sira[j] = sira[j], sira[i]
+    return yeni
+
+
 def _generate_neighbor(solution: TSSolution,
                        pieces_expanded: List[Piece3D],
                        max_bins: int,
                        operator: str = 'round_robin') -> TSSolution:
     """
-    [DEĞİŞTİRİLDİ] Round-robin operatör seçimi: relocate, swap, cycle_shift.
+    [DEĞİŞTİRİLDİ] Round-robin operatör seçimi: relocate, swap,
+    cycle_shift, reorder.
     Mack et al. (2004): Farklı operatörlerin dönüşümlü kullanımı.
+
+    NOT — SA ile Tabu'nun ayrımı: ikisi de aynı hamle TÜRLERİNİ kullanır
+    (zaten kullanıyordu), ayrım ARAMA DENETİMİNDEDİR. SA tek rastgele
+    komşu üretir ve Metropolis ölçütüyle kabul eder (olasılıksal, bellek
+    yok); Tabu aday listesi üretir, tabu belleği + aspirasyon + frekans
+    cezasıyla seçer. Bu, yöntemlerin kanonik tanımıdır; yapay bir fark
+    eklenmemiştir.
     """
     n = len(pieces_expanded)
     n_bins = max(solution.bin_assignments) + 1 if solution.bin_assignments else 1
@@ -181,6 +214,13 @@ def _generate_neighbor(solution: TSSolution,
             new_sol.bin_assignments[j] = b1
             return new_sol
 
+    # Bin-içi sıra değişimi — ayrı bir operatör ve aynı zamanda relocate
+    # için güvenli geri düşüş.
+    if operator == 'reorder':
+        sirali = _reorder_neighbor(solution)
+        if sirali is not None:
+            return sirali
+
     # Default: relocate
     new_sol = solution.copy()
     idx = random.randint(0, n - 1)
@@ -190,7 +230,14 @@ def _generate_neighbor(solution: TSSolution,
         target_candidates.append(n_bins)
     target_candidates = [b for b in target_candidates if b != old_bin]
     if not target_candidates:
-        return new_sol
+        # ÖLÇÜLEN SORUN: burada eskiden DEĞİŞTİRİLMEMİŞ bir kopya
+        # dönüyordu. Tek konteynerli örnekte (benchmark'ın tamamı) başka
+        # bin olmadığı için HER komşu mevcut çözümün aynısı oluyordu →
+        # delta = 0 → Kirkpatrick kalibrasyonu yedek değere (T0=1000)
+        # düşüyor ve SA hiçbir arama yapmıyordu. Ölçüm: 52 değerlendirme,
+        # 0 iyileşme, "Auto T0 = 1000.00".
+        sirali = _reorder_neighbor(solution)
+        return sirali if sirali is not None else new_sol
     new_bin = random.choice(target_candidates)
     new_sol.bin_assignments[idx] = new_bin
     if old_bin in new_sol.piece_orders:
@@ -248,22 +295,45 @@ def simulated_annealing_3d_optimization(
     print(f"🌡️ SA-ACR: {total_pieces} palet, max {max_time}s, "
           f"adaptive={use_adaptive_cooling}, archive={archive_size}")
 
-    current = (_plan_to_ts_solution(initial_solution, pieces_expanded)
-               if initial_solution and initial_solution.bins
-               else _create_initial_solution(pieces_expanded, trucks_sorted, max_bins))
-
-    fitness, util, n_bins, plan = evaluate_solution(
-        current, pieces_expanded, trucks, piece_info, engine)
+    # Başlangıç: tohum ve kendi ilk çözümü DEĞERLENDİRİLİP en iyisi seçilir.
+    # FFD körlemesine dayatılmaz; gerekçe `tabu_search_3d.en_iyi_baslangic`
+    # docstring'inde (tohumu yeniden paketlemek parça kaybettirebiliyor).
+    _adaylar = [_create_initial_solution(pieces_expanded, trucks_sorted,
+                                         max_bins)]
+    if initial_solution and initial_solution.bins:
+        _adaylar.insert(0, _plan_to_ts_solution(initial_solution,
+                                                pieces_expanded))
+    _bin_cache = BinOnbellegi()   # koşuya özel; isabet sayaçlı
+    current, fitness, util, n_bins, plan = en_iyi_baslangic(
+        _adaylar, pieces_expanded, trucks, piece_info, engine,
+        bin_cache=_bin_cache)
     print(f"  Başlangıç: {n_bins} bin, %{util:.1f}")
 
-    # ── [KORUNDU] Kirkpatrick (1983) T0 auto-kalibrasyon ─────────────────
+    # ── Kirkpatrick (1983) T0 auto-kalibrasyon ───────────────────────────
+    # ÖLÇÜLEN SORUN: örnekleme döngüsünde ZAMAN KONTROLÜ YOKTU. Her örnek
+    # tam bir EP yeniden-paketlemesi çalıştırır; 138 parçalık örnekte 50
+    # örnek ~6,5 sn sürüyor ve 4 sn'lik bütçenin TAMAMINI yiyordu —
+    # asıl tavlama döngüsüne sıra gelmiyordu (ölçüldü: 52 değerlendirmenin
+    # 50'si kalibrasyon, 0 iyileşme).
+    # Kalibrasyona bütçenin en çok %20'si ayrılır; toplanan örneklerle
+    # devam edilir (Kirkpatrick'in formülü örnek sayısına duyarlı değildir,
+    # yalnız ortalama farkı ister).
+    _kalib_butce = (max_time * 0.20) if max_time > 0 else float("inf")
+    _kalib_bas = time.time()
     if initial_temp <= 0:
         sample_deltas = []
         for _ in range(min(50, n * 2)):
-            op = random.choice(['relocate', 'swap', 'cycle_shift'])
+            if (time.time() - _kalib_bas) >= _kalib_butce:
+                break
+            op = random.choice(['relocate', 'swap', 'cycle_shift', 'reorder'])
             trial = _generate_neighbor(current, pieces_expanded, max_bins, op)
-            f_trial, _, _, _ = evaluate_solution(
-                trial, pieces_expanded, trucks, piece_info, engine)
+            _tr = evaluate_solution(
+                trial, pieces_expanded, trucks, piece_info, engine,
+                bin_cache=_bin_cache,
+                deadline=(start_time + max_time) if max_time > 0 else None)
+            if _tr is None:          # süre doldu — yarım sonuç kullanılmaz
+                break
+            f_trial = _tr[0]
             delta = f_trial - fitness
             if delta > 0:
                 sample_deltas.append(delta)
@@ -288,7 +358,7 @@ def simulated_annealing_3d_optimization(
 
     no_improve_count = 0
     iteration = 0
-    operators = ['relocate', 'swap', 'cycle_shift']
+    operators = ['relocate', 'swap', 'cycle_shift', 'reorder']
     op_idx = 0
 
     while time.time() - start_time < max_time:
@@ -308,8 +378,15 @@ def simulated_annealing_3d_optimization(
 
             neighbor = _generate_neighbor(
                 current, pieces_expanded, max_bins, op)
-            f_neighbor, u_neighbor, nb_neighbor, p_neighbor = evaluate_solution(
-                neighbor, pieces_expanded, trucks, piece_info, engine)
+            _komsu = evaluate_solution(
+                neighbor, pieces_expanded, trucks, piece_info, engine,
+                bin_cache=_bin_cache,
+                deadline=(start_time + max_time) if max_time > 0 else None)
+            if _komsu is None:
+                # Süre doldu: YARIM değerlendirme kabul edilmez; elde
+                # tutulan en iyi TAMAMLANMIŞ çözümle çıkılır.
+                break
+            f_neighbor, u_neighbor, nb_neighbor, p_neighbor = _komsu
 
             delta = f_neighbor - fitness
             attempts += 1
@@ -371,7 +448,8 @@ def simulated_annealing_3d_optimization(
             best_plan = arch_plan
 
     _, final_util, final_bins, final_plan = evaluate_solution(
-        best_solution, pieces_expanded, trucks, piece_info, engine)
+        best_solution, pieces_expanded, trucks, piece_info, engine,
+        bin_cache=_bin_cache)
     # Arşiv çözümü SA'dan iyiyse onu kullan
     if archive and archive.best() and archive.best()[0] < best_fitness:
         final_plan = archive.best()[2]
@@ -391,4 +469,5 @@ def simulated_annealing_3d_optimization(
     print(f"  📊 Kullanım    : %{final_util:.1f}")
     print(f"  ⏱️  Süre        : {execution_time:.2f}s")
     print(f"  α son değer    : {alpha:.4f} (başlangıç: {cooling_rate:.4f})")
-    return final_plan
+    # Sonuç tohumdan kötüyse tohumu döndür (asla geriye gitme)
+    return tohum_korumasi(final_plan, initial_solution, trucks, piece_info)

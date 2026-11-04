@@ -6,6 +6,9 @@ plotly>=5.20.0
 kaleido>=0.2.1
 pandas>=2.0.0
 numpy>=1.24.0
+# app_3d.py matplotlib'i KOŞULSUZ import eder (backend'i Agg'ye sabitlemek
+# için, pyplot'tan önce). Eksikse uygulama hiç açılmaz.
+matplotlib>=3.7.0
 
 # Geometri & NFP  ← STL/STEP için ZORUNLU
 trimesh>=4.0.0
@@ -25,3 +28,6 @@ psycopg2-binary>=2.9.0
 
 # STEP okuma (isteğe bağlı, Docker/local'da aktif edin)
 # cadquery>=2.4.0
+
+# ── Geliştirme / doğrulama (uygulama için zorunlu değil) ──
+pytest>=8.0.0

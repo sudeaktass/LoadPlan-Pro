@@ -83,25 +83,30 @@ def _select_best_and_diverse(
 ) -> Tuple[Optional['CuttingPlan3D'], Optional['CuttingPlan3D']]:
     """
     Exploration sonuçlarından iki farklı starting point seç:
-      1. En iyi (max utilization) → güvenli derinleşme
-      2. En çeşitli (max mesafe en iyiden) → alternatif bölge keşfi
+      1. En iyi (ortak amaç fonksiyonuna göre) → güvenli derinleşme
+      2. En çeşitli (en iyiden en uzak) → alternatif bölge keşfi
+
+    NOT: stage_results[i][0] artık `amac_fonksiyonu.plan_uygunlugu`
+    değeridir ve DÜŞÜK = DAHA İYİ. Eskiden doluluk yüzdesiydi (yüksek =
+    iyi); aramanın optimize ettiğinden farklı bir ölçüye göre seçim
+    yapılıyordu.
 
     Returns: (best_seed, diverse_seed)
     """
     if not stage_results:
         return None, None
 
-    stage_results_sorted = sorted(stage_results, key=lambda x: -x[0])
+    stage_results_sorted = sorted(stage_results, key=lambda x: x[0])
     best_seed = stage_results_sorted[0][2]   # Orijinal seed
 
     if len(stage_results_sorted) < 2:
         return best_seed, None
 
-    best_util = stage_results_sorted[0][0]
+    en_iyi_uygunluk = stage_results_sorted[0][0]
     # En büyük farkı olan = en çeşitli
     diverse_entry = max(
         stage_results_sorted[1:],
-        key=lambda x: abs(x[0] - best_util)
+        key=lambda x: abs(x[0] - en_iyi_uygunluk)
     )
     diverse_seed = diverse_entry[2]
     return best_seed, diverse_seed
@@ -113,19 +118,39 @@ def _diversified_starts(
     pieces: List[Piece3D],
     trucks: List[Truck3D],
     n_starts: int,
+    kalan_sure: Optional[float] = None,
 ) -> List[CuttingPlan3D]:
-    """[KORUNDU] FFD + Greedy + MC çeşitlendirilmiş başlangıçlar."""
+    """FFD + Greedy + MC çeşitlendirilmiş başlangıçlar.
+
+    DÜZELTME (22 Ekim 2026): başlangıç üretimi zaman bütçesine DÂHİL
+    DEĞİLDİ. Büyük örneklerde FFD+Greedy+MC tek başına bütçeyi aşıyor,
+    geriye kalan süre negatife düşüyor ve SA negatif `max_time` ile
+    çağrılıyordu. Ölçüldü (algoritma_denetimi, 4 sn bütçe): Multi-Start
+    SA 8,2 sn ve 17,3 sn sürüyordu.
+
+    `kalan_sure` verilirse, süre dolduğunda ek başlangıç ÜRETİLMEZ;
+    elde olanlarla devam edilir. None ise eski (sınırsız) davranış.
+    """
+    bas = time.time()
+
+    def _sure_doldu() -> bool:
+        return kalan_sure is not None and (time.time() - bas) >= kalan_sure
+
     starts = []
     try:
         starts.append(ffd_3d_optimization(pieces, trucks))
     except Exception:
         pass
+    if _sure_doldu():
+        return starts[:n_starts]
     try:
         starts.append(greedy_3d_optimization(pieces, trucks))
     except Exception:
         pass
     mc_needed = max(0, n_starts - len(starts))
     for i in range(mc_needed):
+        if _sure_doldu():
+            break
         try:
             plan = monte_carlo_3d_optimization(
                 pieces, trucks,
@@ -163,9 +188,14 @@ def multistart_sa_3d(
         base_explore_ratio      : Başlangıç keşif oranı (ablasyon: 0.2–0.6)
         seed                    : Verilirse rastgelelik sabitlenir → tekrarlanabilir
     """
+    from amac_fonksiyonu import plan_uygunlugu
+
     if seed is not None:
         random.seed(seed)
     start_time = time.time()
+    # Aşama sonuçlarının ve nihai seçimin ortak amaç fonksiyonuyla
+    # puanlanabilmesi için parça sözlüğü (tek yerde kurulur).
+    piece_bilgi = {p.id: p for p in pieces}
     print(f"\n🔁 DMS-SA: {n_starts} başlangıç, {time_budget:.0f}s bütçe, "
           f"adaptive_budget={use_adaptive_budget}, "
           f"clustering={use_solution_clustering}")
@@ -196,7 +226,11 @@ def multistart_sa_3d(
 
     if initial_solution and initial_solution.bins:
         _try_add_start(initial_solution)
-    for s in _diversified_starts(pieces, trucks, n_starts):
+    # Başlangıç üretimine bütçenin yalnız bir bölümü ayrılır; gerisi
+    # asıl aramaya kalmalı.
+    _baslangic_payi = time_budget * 0.35 - (time.time() - start_time)
+    for s in _diversified_starts(pieces, trucks, n_starts,
+                                 kalan_sure=max(0.0, _baslangic_payi)):
         _try_add_start(s)
 
     starts = starts[:n_starts]
@@ -232,7 +266,11 @@ def multistart_sa_3d(
                 initial_temp=initial_temp,
                 cooling_rate=cooling_rate,
             )
-            stage_results.append((plan.utilization, plan, seed_plan))
+            # Aşama sonuçları ortak amaç fonksiyonuyla puanlanır (düşük =
+            # iyi). `stage_utils` ayrı tutulur: o yalnız çeşitlilik
+            # ölçüsüdür, adaptive bütçe hesabında kullanılır.
+            stage_results.append(
+                (plan_uygunlugu(plan, trucks, piece_bilgi), plan, seed_plan))
             stage_utils.append(plan.utilization)
             print(f"    → %{plan.utilization:.2f}")
 
@@ -244,7 +282,8 @@ def multistart_sa_3d(
 
     if not stage_results:
         fallback = ffd_3d_optimization(pieces, trucks)
-        stage_results.append((fallback.utilization, fallback, fallback))
+        stage_results.append(
+            (plan_uygunlugu(fallback, trucks, piece_bilgi), fallback, fallback))
         stage_utils.append(fallback.utilization)
 
     # ── [EKLENDİ] Adaptive budget hesaplama ──────────────────────────────
@@ -258,7 +297,7 @@ def multistart_sa_3d(
         actual_explore_ratio = base_explore_ratio
 
     # ── [EKLENDİ] Solution clustering ────────────────────────────────────
-    stage_results_sorted = sorted(stage_results, key=lambda x: -x[0])
+    stage_results_sorted = sorted(stage_results, key=lambda x: x[0])
     best_seed_plan    = stage_results_sorted[0][2]
     best_stage_plan   = stage_results_sorted[0][1]
 
@@ -285,6 +324,9 @@ def multistart_sa_3d(
     final_plans = [best_stage_plan]
 
     try:
+        if exploit_main < 0.5:
+            raise RuntimeError(
+                f"bütçe tükendi (kalan {exploit_main:.1f}s) — SA atlandı")
         _t0 = initial_temp * 0.6 if initial_temp and initial_temp > 0 else None
         plan_main = simulated_annealing_3d_optimization(
             pieces, trucks,
@@ -337,15 +379,12 @@ def multistart_sa_3d(
             print(f"  ⚠️ Restart SA hatası: {e}")
 
     # ── En iyi sonucu seç ────────────────────────────────────────────────
-    # DÜZELTME: Salt utilization karşılaştırması, daha az parça yerleştirip
-    # daha yüksek doluluk gösteren planın kazanmasına izin veriyordu.
-    # Sıra: (1) en çok yerleşen parça, (2) en az araç, (3) en yüksek doluluk.
-    def _plan_rank(p: 'CuttingPlan3D'):
-        placed = sum(len(b) for b in p.bins)
-        bins_used = len([b for b in p.bins if b])
-        return (placed, -bins_used, p.utilization)
-
-    best = max(final_plans, key=_plan_rank)
+    # Buradaki elle yazılmış sıralama — (yerleşen, -araç, doluluk) — ortak
+    # amaç fonksiyonunun yaklaşık bir kopyasıydı. Artık doğrudan ortak
+    # ölçü kullanılıyor; iç SA koşuları zaten onu optimize ediyor, dolayısıyla
+    # seçim ile arama aynı hedefe bakıyor.
+    best = min(final_plans,
+               key=lambda p: plan_uygunlugu(p, trucks, piece_bilgi))
     execution_time = time.time() - start_time
     best.algorithm = (
         f"DMS-SA ({n_starts} başlangıç, "

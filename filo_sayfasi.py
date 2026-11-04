@@ -130,8 +130,183 @@ def _sayi_veya_none(x):
     return None if (x is None or float(x) <= 0) else float(x)
 
 
+# -----------------------------------------------------------------------------
+# Tablo ustunde dogrudan duzenleme
+# -----------------------------------------------------------------------------
+#
+# Sude'nin istegi (21 Ekim 2026): "zaten tabloda alan veriyi degistiremiyorum".
+# Artik hucreye tiklayip degistirilebiliyor. Yalniz GIRILEN alanlar aciktir;
+# HESAPLANAN sutunlar (ic hacim, Lift-Top payi, dingil kontrolu) kilitlidir --
+# yoksa tablo kendi icinde celisir. Plaka da kilitlidir: kaydin kimligi odur,
+# degistirmek yeni kayit acmak demektir (bunun icin asagidaki formu kullanin).
+#
+# Dogrulama kaydetme aninda calisir: hatali satir reddedilir, nedeni yazilir,
+# geri kalan satirlar yine de kaydedilir.
+
+_DORSE_TIPLERI = ["tenteli", "frigorifik", "kapalı kasa", "mega"]
+
+# Tabloda "boş sayı". Sütunun türü float kalsın diye None değil NaN
+# kullanıyoruz (None yazarsak sütun "object" olur ve sayı olarak
+# düzenlenemez). Streamlit 1.51 boş bir sayı hücresinde gri "None"
+# yazar — hem NaN'da hem pd.NA'da aynı, değiştirilemiyor; bu yüzden
+# anlamı tablo altındaki açıklamada yazıyor.
+_BOS = float("nan")
+
+_BOS_HUCRE_NOTU = ("Boş bir sayı hücresinde gri **None** yazar; bu "
+                   "\"değer girilmemiş\" demektir.")
+
+
+def _ayni_mi(a, b) -> bool:
+    """İki hücre değeri aynı mı? (boş/NaN ve sayı karşılaştırması dâhil)"""
+    a_bos = a is None or (isinstance(a, float) and pd.isna(a))
+    b_bos = b is None or (isinstance(b, float) and pd.isna(b))
+    if a_bos or b_bos:
+        return a_bos and b_bos
+    if isinstance(a, bool) or isinstance(b, bool):
+        return bool(a) == bool(b)
+    if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+        return abs(float(a) - float(b)) < 1e-9
+    return str(a) == str(b)
+
+
+def _hucre_cevir(deger, tur):
+    """Tablodaki hücreyi dataclass alanının beklediği türe çevirir."""
+    bos = deger is None or (isinstance(deger, float) and pd.isna(deger))
+    if tur == "metin":
+        return "" if bos else str(deger).strip()
+    if tur == "kutu":
+        return bool(deger)
+    if tur == "tam":
+        return 0 if bos else int(deger)
+    if tur == "ondalik_bos":          # boş bırakılabilen sayı -> None
+        return None if (bos or float(deger) == 0) else float(deger)
+    return 0.0 if bos else float(deger)
+
+
+def _tablo_farklari(satirlar, duzenlenen, sutun_alan, kimlik="Plaka"):
+    """Tabloda ne değişti? → {plaka: {dataclass alanı: yeni değer}}
+
+    Satırlar NUMARAYA göre değil PLAKAYA göre eşleştirilir: kullanıcı bir
+    sütun başlığına tıklayıp tabloyu sıralayabilir, o zaman satır numarası
+    kayar ve değişiklik YANLIŞ araca yazılırdı. Plaka sütunu kilitli
+    olduğu için güvenli bir kimliktir.
+
+    (Arayüzden ayrı tutuldu ki test edilebilsin — bkz. test_filo_tablo.py)
+    """
+    eski_satir = {r[kimlik]: r for r in satirlar}
+    degisenler = {}
+    for i in duzenlenen.index:
+        anahtar = duzenlenen.at[i, kimlik]
+        eski = eski_satir.get(anahtar)
+        if eski is None:
+            continue
+        farklar = {}
+        for sutun, (alan, tur) in sutun_alan.items():
+            if sutun not in eski:
+                continue
+            if _ayni_mi(eski[sutun], duzenlenen.at[i, sutun]):
+                continue
+            farklar[alan] = _hucre_cevir(duzenlenen.at[i, sutun], tur)
+        if farklar:
+            degisenler[anahtar] = farklar
+    return degisenler
+
+
+def _duzenlenebilir_tablo(onek, kayitlar, satirlar, sutun_alan,
+                          sutun_ayari, dogrula, kaydet, sonradan=None):
+    """Tabloyu düzenlenebilir çizer; 'kaydet' düğmesiyle veritabanına yazar.
+
+    `satirlar` ekranda görünen sözlükler, `kayitlar` ile AYNI sıradadır.
+    `sutun_alan`: {görünen sütun: (dataclass alanı, tür)} -- yalnız burada
+    adı geçen sütunlar düzenlenebilir, kalanı kilitlidir.
+    `sonradan`: kaydetmeden hemen önce kayda uygulanacak ek kural
+    (örn. dorsede Z max girilince Lift-Top'ı açmak).
+    """
+    df = pd.DataFrame(satirlar)
+    # Kaydettikten sonra düzenleyiciye YENİ bir anahtar veriyoruz; yoksa
+    # Streamlit eski düzenlemeleri satır numarasına göre tekrar uygular.
+    surum = st.session_state.get(f"_{onek}_tablo_surum", 0)
+    duzenlenen = st.data_editor(
+        df, hide_index=True, width="stretch", num_rows="fixed",
+        key=f"{onek}_tablo_{surum}",
+        disabled=[c for c in df.columns if c not in sutun_alan],
+        column_config=sutun_ayari)
+
+    kayit_ara = {k.plaka: k for k in kayitlar}
+    degisenler = {p: f for p, f in
+                  _tablo_farklari(satirlar, duzenlenen, sutun_alan).items()
+                  if p in kayit_ara}
+
+    if not degisenler:
+        st.caption("✏️ Bir hücreye çift tıklayıp değeri değiştirebilirsiniz. "
+                   "Gri sütunlar hesaplanır ya da kaydın kimliğidir, elle "
+                   "değişmez. Değişiklik yapınca kaydet düğmesi burada çıkar.")
+        return
+
+    st.warning(f"✏️ **{len(degisenler)} satırda** kaydedilmemiş değişiklik "
+               "var. Kaydetmeden sayfadan ayrılırsanız kaybolur.")
+    if not st.button("💾 Tablodaki değişiklikleri kaydet", type="primary",
+                     key=f"{onek}_tablo_kaydet"):
+        return
+
+    basarili, hatalar = 0, []
+    for plaka, farklar in degisenler.items():
+        aday = dataclasses.replace(kayit_ara[plaka], **farklar)
+        if sonradan is not None:
+            aday = sonradan(aday)
+        hata = dogrula(aday) or kaydet(aday)
+        if hata:
+            hatalar.append(f"**{plaka}** — {hata}")
+        else:
+            basarili += 1
+    for h in hatalar:
+        st.error(f"⛔ {h} (bu satır kaydedilmedi)")
+    if basarili:
+        st.success(f"✅ {basarili} kayıt güncellendi.")
+        st.session_state[f"_{onek}_tablo_surum"] = surum + 1
+        # Aşağıdaki form da yenilensin -- seçili kayıt değişmiş olabilir.
+        st.session_state.pop(f"_{onek}_son_secim", None)
+        st.rerun()
+
+
+def _cekici_dogrula(c: Cekici) -> Optional[str]:
+    if not (c.plaka or "").strip():
+        return "plaka boş olamaz"
+    if (c.bos_agirlik_kg or 0) <= 0:
+        return "boş ağırlık 0'dan büyük olmalı"
+    if not 1 <= int(c.dingil_sayisi or 0) <= 5:
+        return "dingil sayısı 1 ile 5 arasında olmalı"
+    return None
+
+
+def _dorse_dogrula(d: Dorse) -> Optional[str]:
+    if not (d.plaka or "").strip():
+        return "plaka boş olamaz"
+    for ad, deger in (("X · genişlik", d.ic_genislik_mm),
+                      ("Y · uzunluk", d.ic_uzunluk_mm),
+                      ("Z · yükseklik", d.ic_yukseklik_mm)):
+        if (deger or 0) <= 0:
+            return f"{ad} 0'dan büyük olmalı"
+    if (d.bos_agirlik_kg or 0) <= 0:
+        return "boş ağırlık 0'dan büyük olmalı"
+    if not 1 <= int(d.dingil_sayisi or 0) <= 4:
+        return "dingil sayısı 1 ile 4 arasında olmalı"
+    if d.tip not in _DORSE_TIPLERI:
+        return f"tip şunlardan biri olmalı: {', '.join(_DORSE_TIPLERI)}"
+    if d.yukseklik_max_mm and d.yukseklik_max_mm <= d.ic_yukseklik_mm:
+        return (f"Z max ({d.yukseklik_max_mm:.0f} mm), Z · yükseklikten "
+                f"({d.ic_yukseklik_mm:.0f} mm) büyük olmalı")
+    return None
+
+
+def _dorse_tavan_kurali(d: Dorse) -> Dorse:
+    """Tabloda Z max girilince Lift-Top kendiliğinden açılır/kapanır."""
+    acik = bool(d.yukseklik_max_mm and d.yukseklik_max_mm > d.ic_yukseklik_mm)
+    return dataclasses.replace(d, ayarlanabilir_tavan=acik)
+
+
 def _cekici_listesi(cekiciler: List[Cekici]) -> None:
-    """Kayıtlı çekicilerin özet tablosu — tek bakışta görünsün."""
+    """Kayıtlı çekicilerin tablosu -- doğrudan düzenlenebilir."""
     if not cekiciler:
         st.caption("Henüz çekici kaydı yok.")
         return
@@ -140,22 +315,54 @@ def _cekici_listesi(cekiciler: List[Cekici]) -> None:
         eksik = c.eksik_dingil_alanlari()
         satirlar.append({
             "Plaka": c.plaka,
-            "Marka / model": c.marka_model or "—",
-            "Dingil": c.dingil_sayisi,
-            "Boş ağırlık (kg)": int(c.bos_agirlik_kg or 0),
-            "GCW (kg)": int(c.teknik_gcw_kg) if c.teknik_gcw_kg else "—",
-            "e (mm)": int(c.besinci_teker_ofset_mm or 0),
+            "Marka / model": c.marka_model or "",
+            "Dingil": int(c.dingil_sayisi or 0),
+            "Boş ağırlık (kg)": float(c.bos_agirlik_kg or 0),
+            "GCW (kg)": float(c.teknik_gcw_kg) if c.teknik_gcw_kg else _BOS,
+            "e (mm)": float(c.besinci_teker_ofset_mm or 0),
             "Dingil kontrolü": "✅" if not eksik else f"⚠️ {len(eksik)} eksik",
             "Varsayım": "🔎" if c.varsayim_alanlari else "",
             # Kaynak her zaman görünsün: bir kaydın gerçek föyden mi yoksa
             # deneme amaçlı kurgudan mı geldiği gözden kaçmasın.
-            "Kaynak": c.kaynak or "—",
+            "Kaynak": c.kaynak or "",
         })
-    st.dataframe(pd.DataFrame(satirlar), hide_index=True, width="stretch")
+    st.caption("**GCW**: üreticinin çekici + dorse için verdiği sınır; "
+               "yasal toplamla karşılaştırılır, küçüğü bağlar. "
+               "Girilmesi zorunlu değildir. " + _BOS_HUCRE_NOTU)
+    _duzenlenebilir_tablo(
+        "ck", cekiciler, satirlar,
+        sutun_alan={
+            "Marka / model":    ("marka_model", "metin"),
+            "Dingil":           ("dingil_sayisi", "tam"),
+            "Boş ağırlık (kg)": ("bos_agirlik_kg", "ondalik"),
+            "GCW (kg)":         ("teknik_gcw_kg", "ondalik_bos"),
+            "e (mm)":           ("besinci_teker_ofset_mm", "ondalik"),
+            "Kaynak":           ("kaynak", "metin"),
+        },
+        sutun_ayari={
+            "Marka / model": st.column_config.TextColumn(
+                help="Yalnız tanımak için; hesaba girmez."),
+            "Dingil": st.column_config.NumberColumn(
+                min_value=1, max_value=5, step=1, format="%d",
+                help="4x2 -> 2 · 6x2 / 6x4 -> 3."),
+            "Boş ağırlık (kg)": st.column_config.NumberColumn(
+                min_value=0.0, step=10.0, format="%.0f",
+                help="Çekicinin yüksüz ağırlığı. Faydalı yük bundan düşülür."),
+            "GCW (kg)": st.column_config.NumberColumn(
+                min_value=0.0, step=100.0, format="%.0f",
+                help="Üreticinin kombinasyon sınırı. Boş bırakılabilir."),
+            "e (mm)": st.column_config.NumberColumn(
+                step=10.0, format="%.0f",
+                help="Beşinci tekerin tahrik dingiline uzaklığı; "
+                     "dingilin ÖNÜNDE ise pozitif."),
+            "Kaynak": st.column_config.TextColumn(
+                help="Bu değerler nereden geldi? (föy, ruhsat, kurgu...)"),
+        },
+        dogrula=_cekici_dogrula, kaydet=_cekici_kaydet)
 
 
 def _dorse_listesi(dorseler: List[Dorse]) -> None:
-    """Kayıtlı dorselerin özet tablosu."""
+    """Kayıtlı dorselerin tablosu -- doğrudan düzenlenebilir."""
     if not dorseler:
         st.caption("Henüz dorse kaydı yok.")
         return
@@ -165,18 +372,73 @@ def _dorse_listesi(dorseler: List[Dorse]) -> None:
         satirlar.append({
             "Plaka": d.plaka,
             "Tip": d.tip,
-            "İç ölçü (mm)": f"{d.ic_uzunluk_mm:.0f}×{d.ic_genislik_mm:.0f}"
-                            f"×{d.ic_yukseklik_mm:.0f}",
+            # İç ölçüler ayrı sütunlarda: X = genişlik, Y = uzunluk,
+            # Z = yükseklik (yerleştirme motorunun eksenleriyle aynı).
+            "X · genişlik (mm)": float(d.ic_genislik_mm),
+            "Y · uzunluk (mm)": float(d.ic_uzunluk_mm),
+            "Z · yükseklik (mm)": float(d.ic_yukseklik_mm),
+            # tavan_payi_mm > 0 değilse yükseltme fiilen YOK; o zaman
+            # "Z max" de gösterilmez (yoksa tablo kendi içinde çelişir).
+            "Z max (Lift-Top)": (float(d.yukseklik_max_mm)
+                                 if d.tavan_payi_mm else _BOS),
+            "Lift-Top": (f"⬆️ +{d.tavan_payi_mm:.0f} mm"
+                         if d.tavan_payi_mm else "— sabit"),
             "İç hacim (m³)": round(d.ic_hacim_m3, 1),
-            "Boş ağırlık (kg)": int(d.bos_agirlik_kg or 0),
-            "Dingil": d.dingil_sayisi,
+            "Boş ağırlık (kg)": float(d.bos_agirlik_kg or 0),
+            "Dingil": int(d.dingil_sayisi or 0),
             "Dingil kontrolü": "✅" if not eksik else f"⚠️ {len(eksik)} eksik",
-            "40 ft": "📦" if d.iso_40ft_konteyner else "",
-            "Tavan": (f"⬆️ +{d.tavan_payi_mm:.0f} mm"
-                      if d.tavan_payi_mm else "sabit"),
-            "Kaynak": d.kaynak or "—",
+            "40 ft": bool(d.iso_40ft_konteyner),
+            "Kaynak": d.kaynak or "",
         })
-    st.dataframe(pd.DataFrame(satirlar), hide_index=True, width="stretch")
+    st.caption("X = genişlik, Y = uzunluk (kapıya doğru), Z = yükseklik. "
+               "İç hacim bu üç ölçüden **hesaplanır**. "
+               "**Z max**: tavan kaldırıldığındaki yükseklik (Lift-Top) — "
+               "Z'den büyük bir değer yazınca Lift-Top kendiliğinden açılır, "
+               "boşaltınca kapanır. " + _BOS_HUCRE_NOTU +
+               " Z max boşsa yanındaki **Lift-Top** sütunu \"— sabit\" der.")
+    _duzenlenebilir_tablo(
+        "dr", dorseler, satirlar,
+        sutun_alan={
+            "Tip":                 ("tip", "metin"),
+            "X · genişlik (mm)":   ("ic_genislik_mm", "ondalik"),
+            "Y · uzunluk (mm)":    ("ic_uzunluk_mm", "ondalik"),
+            "Z · yükseklik (mm)":  ("ic_yukseklik_mm", "ondalik"),
+            "Z max (Lift-Top)":    ("yukseklik_max_mm", "ondalik_bos"),
+            "Boş ağırlık (kg)":    ("bos_agirlik_kg", "ondalik"),
+            "Dingil":              ("dingil_sayisi", "tam"),
+            "40 ft":               ("iso_40ft_konteyner", "kutu"),
+            "Kaynak":              ("kaynak", "metin"),
+        },
+        sutun_ayari={
+            "Tip": st.column_config.SelectboxColumn(
+                options=_DORSE_TIPLERI,
+                help="Frigorifik seçilirse KTY genişlik sınırı 2,60 m olur "
+                     "(diğerlerinde 2,55 m)."),
+            "X · genişlik (mm)": st.column_config.NumberColumn(
+                min_value=0.0, step=10.0, format="%.0f"),
+            "Y · uzunluk (mm)": st.column_config.NumberColumn(
+                min_value=0.0, step=10.0, format="%.0f"),
+            "Z · yükseklik (mm)": st.column_config.NumberColumn(
+                min_value=0.0, step=10.0, format="%.0f",
+                help="Tavan İNDİRİLMİŞ hâldeki iç yükseklik."),
+            "Z max (Lift-Top)": st.column_config.NumberColumn(
+                min_value=0.0, step=10.0, format="%.0f",
+                help="Tavan kaldırıldığındaki iç yükseklik. "
+                     "Z'den büyük olmalı; boş bırakılırsa tavan sabittir."),
+            "İç hacim (m³)": st.column_config.NumberColumn(format="%.1f"),
+            "Boş ağırlık (kg)": st.column_config.NumberColumn(
+                min_value=0.0, step=10.0, format="%.0f"),
+            "Dingil": st.column_config.NumberColumn(
+                min_value=1, max_value=4, step=1, format="%d",
+                help="Tipik yarı römork 3 dingillidir."),
+            "40 ft": st.column_config.CheckboxColumn(
+                help="44 t istisnası YALNIZCA bu işaretliyse VE çekici "
+                     "3 dingilliyse uygulanır (KTY md.128)."),
+            "Kaynak": st.column_config.TextColumn(
+                help="Bu değerler nereden geldi? (föy, ruhsat, kurgu...)"),
+        },
+        dogrula=_dorse_dogrula, kaydet=_dorse_kaydet,
+        sonradan=_dorse_tavan_kurali)
 
 
 def _uyarilari_goster(uyarilar, varsayimlar=None):
@@ -195,22 +457,108 @@ def _uyarilari_goster(uyarilar, varsayimlar=None):
 # Çekici sekmesi
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Açılır kutudan bir kayıt seçilince forma yazılacak alanlar.
+# (session_state anahtarı, kayıttaki alan, tür, boş kayıt varsayılanı)
+_CEKICI_ALANLARI = [
+    ("ck_plaka",       "plaka",                   "metin",   ""),
+    ("ck_marka",       "marka_model",             "metin",   ""),
+    ("ck_dingil",      "dingil_sayisi",           "tam",     2),
+    ("ck_bos",         "bos_agirlik_kg",          "ondalik", 0.0),
+    ("ck_e",           "besinci_teker_ofset_mm",  "ondalik", 0.0),
+    ("ck_bon",         "bos_on_dingil_kg",        "ondalik", 0.0),
+    ("ck_barka",       "bos_arka_dingil_kg",      "ondalik", 0.0),
+    ("ck_wb",          "dingil_mesafesi_mm",      "ondalik", 0.0),
+    ("ck_onizin",      "on_dingil_izin_kg",       "ondalik", 0.0),
+    ("ck_tahrikizin",  "tahrik_dingil_izin_kg",   "ondalik", 0.0),
+    ("ck_gcw",         "teknik_gcw_kg",           "ondalik", 0.0),
+]
+
+_DORSE_ALANLARI = [
+    ("dr_plaka",        "plaka",                          "metin",   ""),
+    ("dr_tip",          "tip",                            "metin",   "tenteli"),
+    ("dr_dingil",       "dingil_sayisi",                  "tam",     3),
+    ("dr_u",            "ic_uzunluk_mm",                  "ondalik", 0.0),
+    ("dr_g",            "ic_genislik_mm",                 "ondalik", 0.0),
+    ("dr_y",            "ic_yukseklik_mm",                "ondalik", 0.0),
+    ("dr_bos",          "bos_agirlik_kg",                 "ondalik", 0.0),
+    ("dr_aralik",       "dingil_araligi_mm",              "ondalik", 0.0),
+    ("dr_grup",         "dingil_grubu_izin_kg",           "ondalik", 0.0),
+    ("dr_kingpin",      "kingpin_izin_kg",                "ondalik", 0.0),
+    ("dr_kpkenar",      "kingpin_on_kenar_mesafe_mm",     "ondalik", 0.0),
+    ("dr_duvar",        "on_duvar_kalinligi_mm",          "ondalik", 0.0),
+    ("dr_kpgrup",       "kingpin_dingil_grubu_mesafe_mm", "ondalik", 0.0),
+    ("dr_boskp",        "bos_kingpin_payi_kg",            "ondalik", 0.0),
+    ("dr_bosgrup",      "bos_dingil_grubu_payi_kg",       "ondalik", 0.0),
+    ("dr_ayarlanabilir", "ayarlanabilir_tavan",           "kutu",    False),
+    ("dr_yukmax",       "yukseklik_max_mm",               "ondalik", 0.0),
+    ("dr_disyuk",       "dis_yukseklik_mm",               "ondalik", 0.0),
+    ("dr_teknik",       "teknik_azami_kg",                "ondalik", 0.0),
+    ("dr_konteyner",    "iso_40ft_konteyner",             "kutu",    False),
+]
+
+
+def _secim_degistiyse_formu_tazele(onek: str, secim: str, kayit, alanlar):
+    """Açılır kutudan başka bir kayıt seçilince formu O kayıtla doldur.
+
+    Streamlit'te bir alana `key` verilirse, sonraki çizimlerde `value`
+    parametresi YOK SAYILIR. Anahtarı session_state'ten SİLMEK de yetmez:
+    tarayıcı tarafı kendi sakladığı (çoğu zaman boş) değeri bir sonraki
+    çizimde geri gönderir — alan yine boş görünür. Tek güvenilir yol,
+    seçilen kaydın değerlerini doğrudan session_state'e YAZMAKTIR; o zaman
+    Streamlit "bu değer programdan geldi" diye işaretleyip tarayıcıya
+    zorla gönderir.
+
+    (Bu olmadan: "dorse seçiyorum, tavanı işaretliyorum, kaydediyorum ama
+    tabloda görünmüyor" — çünkü plaka alanı boş kaldığı için yeni/boş bir
+    kayıt kaydedilmeye çalışılıyordu.)
+    """
+    anahtar = f"_{onek}_son_secim"
+    if st.session_state.get(anahtar) == secim:
+        return
+    st.session_state[anahtar] = secim
+    for ss_anahtar, alan, tur, varsayilan in alanlar:
+        ham = getattr(kayit, alan, None) if kayit is not None else None
+        if ham is None or ham == "":
+            deger = varsayilan
+        elif tur == "tam":
+            deger = int(ham)
+        elif tur == "ondalik":
+            deger = float(ham)
+        elif tur == "kutu":
+            deger = bool(ham)
+        else:
+            deger = str(ham)
+        st.session_state[ss_anahtar] = deger
+    st.rerun()
+
+
 def _cekici_formu(mevcut: Optional[Cekici]):
     v = mevcut or Cekici(cekici_id="", plaka="", bos_agirlik_kg=0.0)
 
-    st.markdown("##### Zorunlu alanlar")
+    st.markdown("##### Zorunlu alanlar  ·  ⭐ = zorunlu")
+    st.caption(r"Alan adının yanındaki **\*** o alanın zorunlu olduğunu "
+               "gösterir. Her alanın yanındaki **?** işaretine gelince "
+               "kısa açıklaması çıkar.")
     c1, c2, c3 = st.columns(3)
-    plaka = c1.text_input("Plaka", value=v.plaka, key="ck_plaka")
-    marka = c2.text_input("Marka / model", value=v.marka_model, key="ck_marka")
+    plaka = c1.text_input(
+        "Plaka *", value=v.plaka, key="ck_plaka",
+        help="Aracın plakası. Benzersiz olmalı; dorse plakalarıyla da "
+             "çakışamaz. Kaydın kimliği budur.")
+    marka = c2.text_input(
+        "Marka / model", value=v.marka_model, key="ck_marka",
+        help="Yalnız tanımak için. Hesaba girmez. Örnek: Ford F-MAX 4x2")
     dingil = c3.number_input("Dingil sayısı", min_value=1, max_value=5,
                              value=int(v.dingil_sayisi or 2), key="ck_dingil",
                              help="4x2 → 2 · 6x2 / 6x4 → 3. "
                                   "44 t konteyner istisnası 3 dingil ister.")
     c4, c5 = st.columns(2)
-    bos = c4.number_input("Boş ağırlık (kg)", min_value=0.0, step=10.0,
-                          value=float(v.bos_agirlik_kg or 0), key="ck_bos")
+    bos = c4.number_input(
+        "Boş ağırlık (kg) *", min_value=0.0, step=10.0,
+        value=float(v.bos_agirlik_kg or 0), key="ck_bos",
+        help="Çekicinin yüksüz ağırlığı (ruhsat ya da föy). Faydalı yük "
+             "bundan düşülür: 40.000 − çekici − dorse.")
     e_ofset = c5.number_input(
-        "Beşinci teker ofseti · e (mm)", step=10.0,
+        "Beşinci teker ofseti · e (mm) *", step=10.0,
         value=float(v.besinci_teker_ofset_mm or 0), key="ck_e",
         help="Beşinci tekerin TAHRİK DİNGİLİNE yatay uzaklığı. Beşinci "
              "teker dingilin ÖNÜNDE ise POZİTİF. Araç üzerinde "
@@ -221,14 +569,19 @@ def _cekici_formu(mevcut: Optional[Cekici]):
     st.caption("Bu grup **ya tamamen doldurulur ya da tamamen boş bırakılır**. "
                "Boş bırakılırsa araç kaydedilir ama dingil kontrolü yapılamaz.")
     d1, d2, d3 = st.columns(3)
-    bos_on = d1.number_input("Boş ön dingil (kg)", min_value=0.0, step=10.0,
-                             value=float(v.bos_on_dingil_kg or 0), key="ck_bon")
-    bos_arka = d2.number_input("Boş arka (tahrik) dingil (kg)", min_value=0.0,
-                               step=10.0,
-                               value=float(v.bos_arka_dingil_kg or 0),
-                               key="ck_barka")
-    wb = d3.number_input("Dingil mesafesi · WB (mm)", min_value=0.0, step=10.0,
-                         value=float(v.dingil_mesafesi_mm or 0), key="ck_wb")
+    bos_on = d1.number_input(
+        "Boş ön dingil (kg)", min_value=0.0, step=10.0,
+        value=float(v.bos_on_dingil_kg or 0), key="ck_bon",
+        help="Araç boşken ön dingile binen ağırlık. Föyde ayrı verilir.")
+    bos_arka = d2.number_input(
+        "Boş arka (tahrik) dingil (kg)", min_value=0.0, step=10.0,
+        value=float(v.bos_arka_dingil_kg or 0), key="ck_barka",
+        help="Araç boşken tahrik dingiline binen ağırlık.")
+    wb = d3.number_input(
+        "Dingil mesafesi · WB (mm)", min_value=0.0, step=10.0,
+        value=float(v.dingil_mesafesi_mm or 0), key="ck_wb",
+        help="Ön dingil ile tahrik dingili arası. Kingpin yükünün iki "
+             "dingile nasıl dağılacağını belirler.")
     d4, d5 = st.columns(2)
     on_izin = d4.number_input("Ön dingil izni (kg)", min_value=0.0, step=100.0,
                               value=float(v.on_dingil_izin_kg or 0),
@@ -290,25 +643,46 @@ def _dorse_formu(mevcut: Optional[Dorse]):
     v = mevcut or Dorse(dorse_id="", plaka="", tip="tenteli",
                         ic_uzunluk_mm=0, ic_genislik_mm=0, ic_yukseklik_mm=0,
                         bos_agirlik_kg=0, dingil_sayisi=3)
-    tipler = ["tenteli", "frigorifik", "kapalı kasa", "mega"]
+    tipler = _DORSE_TIPLERI
 
-    st.markdown("##### Zorunlu alanlar")
+    st.markdown("##### Zorunlu alanlar  ·  ⭐ = zorunlu")
+    st.caption(r"Alan adının yanındaki **\*** o alanın zorunlu olduğunu "
+               "gösterir. Her alanın yanındaki **?** işaretine gelince "
+               "kısa açıklaması çıkar.")
     c1, c2, c3 = st.columns(3)
-    plaka = c1.text_input("Plaka", value=v.plaka, key="dr_plaka")
-    tip = c2.selectbox("Tip", tipler,
-                       index=tipler.index(v.tip) if v.tip in tipler else 0,
-                       key="dr_tip")
-    dingil = c3.number_input("Dingil sayısı", min_value=1, max_value=4,
-                             value=int(v.dingil_sayisi or 3), key="dr_dingil")
+    plaka = c1.text_input(
+        "Plaka *", value=v.plaka, key="dr_plaka",
+        help="Dorsenin plakası. Benzersiz olmalı; çekici plakalarıyla da "
+             "çakışamaz.")
+    tip = c2.selectbox(
+        "Tip *", tipler,
+        index=tipler.index(v.tip) if v.tip in tipler else 0, key="dr_tip",
+        help="Frigorifik seçilirse KTY genişlik sınırı 2,60 m olur "
+             "(diğerlerinde 2,55 m).")
+    dingil = c3.number_input(
+        "Dingil sayısı *", min_value=1, max_value=4,
+        value=int(v.dingil_sayisi or 3), key="dr_dingil",
+        help="Tipik yarı römork 3 dingillidir. Çekicininkiyle toplanır ve "
+             "KTY md.128'deki yasal toplam ağırlık buradan bulunur.")
     o1, o2, o3 = st.columns(3)
-    ic_u = o1.number_input("İç uzunluk (mm)", min_value=0.0, step=10.0,
-                           value=float(v.ic_uzunluk_mm or 0), key="dr_u")
-    ic_g = o2.number_input("İç genişlik (mm)", min_value=0.0, step=10.0,
-                           value=float(v.ic_genislik_mm or 0), key="dr_g")
-    ic_y = o3.number_input("İç yükseklik (mm)", min_value=0.0, step=10.0,
-                           value=float(v.ic_yukseklik_mm or 0), key="dr_y")
-    bos = st.number_input("Boş ağırlık (kg)", min_value=0.0, step=10.0,
-                          value=float(v.bos_agirlik_kg or 0), key="dr_bos")
+    ic_u = o1.number_input(
+        "Y · İç uzunluk (mm) *", min_value=0.0, step=10.0,
+        value=float(v.ic_uzunluk_mm or 0), key="dr_u",
+        help="Yük alanının uzunluğu. Motorun Y ekseni: 0 = ön duvar, "
+             "artarak kapıya gider.")
+    ic_g = o2.number_input(
+        "X · İç genişlik (mm) *", min_value=0.0, step=10.0,
+        value=float(v.ic_genislik_mm or 0), key="dr_g",
+        help="Yük alanının genişliği (motorun X ekseni).")
+    ic_y = o3.number_input(
+        "Z · İç yükseklik (mm) *", min_value=0.0, step=10.0,
+        value=float(v.ic_yukseklik_mm or 0), key="dr_y",
+        help="Tavan İNDİRİLMİŞ hâldeki iç yükseklik (motorun Z ekseni). "
+             "Lift-Top varsa normal yükseklik budur.")
+    bos = st.number_input(
+        "Boş ağırlık (kg) *", min_value=0.0, step=10.0,
+        value=float(v.bos_agirlik_kg or 0), key="dr_bos",
+        help="Dorsenin yüksüz ağırlığı. Faydalı yük bundan düşülür.")
 
     st.markdown("##### Dingil kontrolü grubu")
     st.caption("Bu grup **ya tamamen doldurulur ya da tamamen boş bırakılır**.")
@@ -728,8 +1102,11 @@ def render():
         _cekici_listesi(cekiciler)
         st.markdown("---")
         secenekler = ["➕ Yeni çekici"] + [c.plaka for c in cekiciler]
-        secim = st.selectbox("Kayıt", secenekler, key="ck_secim")
+        secim = st.selectbox("Kayıt", secenekler, key="ck_secim",
+                             help="Düzenlemek için bir plaka seçin, yeni "
+                                  "araç için ➕ seçeneğini kullanın.")
         mevcut = next((c for c in cekiciler if c.plaka == secim), None)
+        _secim_degistiyse_formu_tazele("ck", secim, mevcut, _CEKICI_ALANLARI)
         yeni = _cekici_formu(mevcut)
 
         b1, b2 = st.columns(2)
@@ -755,8 +1132,11 @@ def render():
         _dorse_listesi(dorseler)
         st.markdown("---")
         secenekler = ["➕ Yeni dorse"] + [d.plaka for d in dorseler]
-        secim = st.selectbox("Kayıt", secenekler, key="dr_secim")
+        secim = st.selectbox("Kayıt", secenekler, key="dr_secim",
+                             help="Düzenlemek için bir plaka seçin, yeni "
+                                  "dorse için ➕ seçeneğini kullanın.")
         mevcut = next((d for d in dorseler if d.plaka == secim), None)
+        _secim_degistiyse_formu_tazele("dr", secim, mevcut, _DORSE_ALANLARI)
         yeni = _dorse_formu(mevcut)
 
         b1, b2 = st.columns(2)

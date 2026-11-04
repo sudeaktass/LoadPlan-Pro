@@ -35,7 +35,7 @@ import time
 import math
 import random
 from typing import List, Dict, Tuple, Optional
-from dataclasses import dataclass, field
+from dataclasses import dataclass, replace as _dc_replace, field
 
 from core_3d import (
     cog_penalty_score,
@@ -87,14 +87,70 @@ class TabuMove:
 
 # ─── EVALUATE (KORUNDU — kritik fonksiyon) ───────────────────────────────────
 
+class BinOnbellegi(dict):
+    """Bin başına paketleme önbelleği + isabet sayaçları.
+
+    Düz `dict` yerine kullanılabilir; `evaluate_solution` her iki türü de
+    kabul eder (sayaçlar yoksa yalnız sayım yapılmaz).
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.isabet = 0
+        self.iska = 0
+
+    @property
+    def toplam(self) -> int:
+        return self.isabet + self.iska
+
+    @property
+    def isabet_orani(self) -> float:
+        return (self.isabet / self.toplam) if self.toplam else 0.0
+
+
 def evaluate_solution(
     solution: TSSolution,
     pieces_expanded: List[Piece3D],
     trucks: List[Truck3D],
     piece_info: Dict,
-    engine: str = 'EP'
-) -> Tuple[float, float, int, CuttingPlan3D]:
-    """[KORUNDU] Çözüm değerlendirme — EP motoru ile fiziksel yerleştirme."""
+    engine: str = 'EP',
+    bin_cache: Optional[Dict] = None,
+    deadline: Optional[float] = None,
+) -> Optional[Tuple[float, float, int, CuttingPlan3D]]:
+    """Çözüm değerlendirme — EP motoru ile fiziksel yerleştirme.
+
+    BIN BAŞINA BELLEĞE ALMA (`bin_cache`, 22 Ekim 2026)
+    ───────────────────────────────────────────────────
+    Bir komşuluk hamlesi (sıra değişimi, transfer, swap) çözümün
+    GENELLİKLE TEK BİR BİNİNİ değiştirir; ama bu fonksiyon her aday için
+    BÜTÜN binleri baştan paketliyordu. Bir bin'in paketlemesi yalnız
+    şunlara bağlıdır:
+        * atandığı araç (ölçüler + Lift-Top ile değişebilen aktif yükseklik)
+        * o bin'deki parçaların SIRALI listesi
+    Binler arası bağımlılık YOKTUR (motor her bin için ayrı kurulur,
+    `check_stacking_rules` yalnız o bin'in yerleşimlerine bakar). Bu
+    yüzden sonuç (araç kimliği, ölçüler, sıralı parça kimlikleri)
+    anahtarıyla belleğe alınabilir — YAKLAŞIKLAMA DEĞİL, birebir aynı
+    sonucun yeniden kullanılmasıdır. Çakışma, destek, ağırlık, CoG ve
+    filo kısıtları aynen motor tarafından hesaplanır.
+
+    `bin_cache=None` ise davranış eskisiyle birebir aynıdır. Önbellek
+    ÇAĞIRAN tarafından verilir ve bir optimizasyon koşusuna aittir;
+    böylece farklı `piece_info`/filo arasında sızma olmaz.
+
+    SÜRE KONTROL NOKTASI (`deadline`, time.time() ölçeğinde)
+    ────────────────────────────────────────────────────────
+    Verilirse, HER BİNDEN ÖNCE süre denetlenir ve dolmuşsa **None**
+    döndürülür. Bin sınırı güvenli bir kontrol noktasıdır: bir bin'in
+    paketlemesi bölünmez ve önbelleğe de bütün hâlde yazılır.
+
+    KISMİ SONUÇ ASLA DÖNDÜRÜLMEZ. Yarım kalan değerlendirme geçerli bir
+    aday sonucu değildir; çağıran None'ı "bu aday değerlendirilemedi"
+    diye okur ve elindeki EN İYİ TAMAMLANMIŞ planı korur. Yarım kalan
+    paketleme önbelleğe de YAZILMAZ.
+
+    `deadline=None` (varsayılan) ise hiçbir denetim yapılmaz.
+    """
     # ── ORTAK ARAÇ AÇMA (filo_havuzu) ───────────────────────────────────
     # Tabu'da binler çözümden gelir; burada her bine bir araç atanır.
     # Sıra artık tüm algoritmalarla aynı (filo_havuzu.ACMA_SIRASI).
@@ -123,6 +179,10 @@ def evaluate_solution(
     overflow_bins = 0
 
     for list_idx, orig_bin_id in enumerate(sorted(bins_global_idx.keys())):
+        # Güvenli kontrol noktası: bin sınırı. Süre dolduysa KISMİ sonuç
+        # döndürmek yerine değerlendirme iptal edilir.
+        if deadline is not None and time.time() >= deadline:
+            return None
         global_indices = bins_global_idx[orig_bin_id]
         if orig_bin_id in solution.piece_orders:
             order = solution.piece_orders[orig_bin_id]
@@ -138,12 +198,37 @@ def evaluate_solution(
         if used_of_type >= total_avail:
             overflow_bins += 1
 
+        # ── Bin önbelleği: aynı (araç, sıralı parça) → aynı paketleme ──
+        _cache_key = None
+        if bin_cache is not None:
+            _cache_key = (truck.id, truck.width, truck.length, truck.height,
+                          tuple(p.id for p in pieces_in_bin))
+            _hit = bin_cache.get(_cache_key)
+            if _hit is not None:
+                if hasattr(bin_cache, "isabet"):
+                    bin_cache.isabet += 1
+                _cached_pl, _cached_unplaced = _hit
+                # bin_id bir ETİKETTİR; yeniden kullanırken düzeltilir.
+                bin_placements = [_dc_replace(pl, bin_id=list_idx)
+                                  for pl in _cached_pl]
+                unplaced += _cached_unplaced
+                bins_list.append(bin_placements)
+                truck_assignments[list_idx] = truck.id
+                total_volume += truck.get_volume()
+                used_volume += sum(_actual_used_volume(p, piece_info)
+                                   for p in bin_placements)
+                continue
+
+        if _cache_key is not None and hasattr(bin_cache, "iska"):
+            bin_cache.iska += 1
+
         packer = create_packing_engine(
             truck.width, truck.length, truck.height,
             engine=engine, heuristic='CP',
             truck=truck, piece_info=piece_info
         )
         bin_placements = []
+        _bin_unplaced = 0
         for piece in pieces_in_bin:
             rotations = get_all_rotations_3d(piece)
             if not rotations:
@@ -166,7 +251,11 @@ def evaluate_solution(
                     placed = True
                     break
             if not placed:
-                unplaced += 1
+                _bin_unplaced += 1
+
+        unplaced += _bin_unplaced
+        if _cache_key is not None:
+            bin_cache[_cache_key] = (list(bin_placements), _bin_unplaced)
 
         bins_list.append(bin_placements)
         truck_assignments[list_idx] = truck.id
@@ -265,6 +354,29 @@ class FrequencyMatrix:
 
 # ─── [DEĞİŞTİRİLDİ] KOMŞULUK ÜRETİMİ ───────────────────────────────────────
 # OR-opt operatörü eklendi (Crainic et al. 2009)
+
+TABU_SIRA_ADAY_SAYISI = 8
+"""Bin-içi sıra operatörünün bir yinelemede üreteceği aday sayısı.
+
+ÖLÇÜLEREK SEÇİLDİ (22 Ekim 2026) — BR7/thpack7, 110 parça, 30 sn bütçe,
+tohumsuz, 4 seed. Ortak amaç skoru (DÜŞÜK = iyi):
+    aday= 4 → 541,3 · 495,3                        (ort. 518,3)
+    aday= 8 → 449,2 · 380,2 · 449,2 · 449,2        (ort. 431,9)  ← seçilen
+    aday=15 → 518,2 · 472,2 · 472,2 · 403,2        (ort. 466,5)
+8 aday dört seed'in üçünde daha iyi, ortalaması daha düşük ve yayılımı
+daha dar. UYARI: bu TEK BİR ÖRNEK üzerinde ölçüldü; genel bir üstünlük
+iddiası değildir.
+
+Her aday TAM bir EP yeniden-paketlemesi gerektirir — Tabu'nun en pahalı
+adımı. Ölçüldü (BR7/thpack7, 110 parça, 30 sn): değerlendirme başına
+~0,5-0,9 sn; 15 adayla bütçeye ancak 2 yineleme sığıyor. Bu sayı,
+"yineleme başına genişlik" ile "bütçedeki yineleme sayısı" arasındaki
+dengeyi belirler. Artımlı değerlendirme uygulanmadı: yerleştirme motoru
+sırayı baştan işlediği için bir hamlenin etkisi yerel değil, bu yüzden
+güvenilir bir artımlı güncelleme yazılamıyor. Doğruluğu BOZMAYAN tek
+ayar budur — amaç fonksiyonu ve plan geçerliliği aynen korunur.
+"""
+
 
 def generate_neighbors(
     solution: TSSolution,
@@ -369,6 +481,43 @@ def generate_neighbors(
                 new_sol.piece_orders.setdefault(target, []).append(idx)
             neighbors.append((new_sol, move, is_tabu(move)))
 
+    # ── 4. [EKLENDİ 22 Ekim 2026] BIN-İÇİ SIRA DEĞİŞİMİ ──────────────────
+    # ÖLÇÜLEN SORUN: yukarıdaki üç operatörün ÜÇÜ DE binler ARASI çalışır.
+    # Tek konteynerli örneklerde (benchmark'ın tamamı: arac_adedi=1)
+    # hedef bin listesi boş kalır ve komşuluk TAMAMEN BOŞ döner. Ölçüm
+    # (deney/scripts/algoritma_denetimi.py, thpack1, 4 sn bütçe):
+    #   78.343 yineleme · 0 üretilen komşu · 1 gerçek değerlendirme
+    #   · 0 iyileşme  → Tabu fiilen hiçbir arama yapmıyordu.
+    #
+    # GEREKÇE: `evaluate_solution` her bin'in `piece_orders` dizisini
+    # yerleştirme SIRASI olarak kullanır; sırayı değiştirmek farklı bir
+    # yerleşim üretir. Eley (2002, EJOR 141:393-409, elimizdeki tam
+    # metin) açgözlü çözümü iyileştirmek için "farklı ürün yükleme
+    # sıralarını" araştıran bir ağaç araması kurar — yani yükleme sırası
+    # CLP'de açık bir arama değişkenidir. Bortfeldt & Gehring (2001,
+    # EJOR 131:143-161) de istif planının gösteriminde katman sırasını
+    # bir bileşen olarak tutar.
+    #
+    # Bu operatör Tabu'nun ayırt edici mekanizmalarını DEĞİŞTİRMEZ:
+    # aday listesi, tabu belleği, aspirasyon ve frekans cezası aynen
+    # kalır; yalnız komşuluk kümesi genişler.
+    for _ in range(min(n_pieces, TABU_SIRA_ADAY_SAYISI)):
+        aday_binler = [b for b, sira in solution.piece_orders.items()
+                       if len(sira) >= 2]
+        if not aday_binler:
+            break
+        b = random.choice(aday_binler)
+        sira = solution.piece_orders[b]
+        i, j = random.sample(range(len(sira)), 2)
+        yeni = solution.copy()
+        yeni_sira = yeni.piece_orders[b]
+        yeni_sira[i], yeni_sira[j] = yeni_sira[j], yeni_sira[i]
+        # Hamle, yeri değişen parçayı ve bulunduğu bin'i temsil eder;
+        # from_bin == to_bin olduğundan tabu kuralı "bu parçayı tenure
+        # boyunca tekrar oynatma" anlamına gelir.
+        move = TabuMove('reorder', sira[i], b, b, current_iter)
+        neighbors.append((yeni, move, is_tabu(move)))
+
     return neighbors
 
 
@@ -397,9 +546,10 @@ def tabu_search_3d_optimization(
         random.seed(seed)
     start_time = time.time()
     piece_info = {p.id: p for p in pieces}
-    # Ortak açma sırası (filo_havuzu.ACMA_SIRASI). _create_initial_solution
-    # ve _diversify trucks_sorted[0]'ı referans araç olarak kullanıyor;
-    # yeni sırada bu EN BÜYÜK araç oluyor (eskiden en küçüğüydü).
+    # Ortak açma sırası (filo_havuzu.ACMA_SIRASI): büyükten küçüğe.
+    # `_create_initial_solution` bu diziyi bin sırasına eşler, yani her
+    # bin kendisine atanacak aracın hacmine ve faydalı yüküne göre
+    # boyutlanır. (`_diversify` aracı hiç kullanmıyor.)
     trucks_sorted = arac_sirala(trucks)
     max_bins = _max_allowed_bins(trucks)
 
@@ -417,9 +567,20 @@ def tabu_search_3d_optimization(
           f"tenure={tabu_tenure} (base), max_bins={max_bins}, "
           f"freq_pen={freq_penalty_w}")
 
-    current = (_plan_to_ts_solution(initial_solution, pieces_expanded)
-               if initial_solution and initial_solution.bins
-               else _create_initial_solution(pieces_expanded, trucks_sorted, max_bins))
+    # Bin başına önbellek: KOŞUYA ÖZEL. Başlangıç seçimi ile ana
+    # döngü AYNI önbelleği paylaşır; başlangıç adaylarının binleri
+    # aramada tekrar karşımıza çıktığında yeniden paketlenmez.
+    # `BinOnbellegi` düz dict'tir + isabet/ıska sayaçları (ölçüm için).
+    _bin_cache = BinOnbellegi()
+    # Başlangıç: tohum ve kendi ilk çözümü DEĞERLENDİRİLİP en iyisi seçilir
+    # (bkz. en_iyi_baslangic gerekçesi). FFD dayatılmaz.
+    _adaylar = [_create_initial_solution(pieces_expanded, trucks_sorted,
+                                         max_bins)]
+    if initial_solution and initial_solution.bins:
+        _adaylar.insert(0, _plan_to_ts_solution(initial_solution,
+                                                pieces_expanded))
+    current = en_iyi_baslangic(_adaylar, pieces_expanded, trucks,
+                               piece_info, engine, bin_cache=_bin_cache)[0]
 
     # ── Değerlendirme memo-cache ─────────────────────────────────────────
     # Her komşu değerlendirmesi TAM yeniden-paketleme (EP) çalıştırır — en
@@ -428,7 +589,12 @@ def tabu_search_3d_optimization(
     _eval_cache: Dict[tuple, tuple] = {}
     _EVAL_CACHE_MAX = 5000
 
-    def _eval_cached(sol: TSSolution):
+    def _eval_cached(sol: TSSolution, deadline=None):
+        """Çözüm değerlendirme (memo). Süre dolarsa None döner.
+
+        None SONUÇ ÖNBELLEĞE YAZILMAZ: yarım kalan bir değerlendirme
+        geçerli bir sonuç değildir, sonraki çağrıda yeniden denenmelidir.
+        """
         key = (tuple(sol.bin_assignments),
                tuple(sorted((b, tuple(o)) for b, o in sol.piece_orders.items())))
         hit = _eval_cache.get(key)
@@ -438,7 +604,11 @@ def tabu_search_3d_optimization(
             sol.total_utilization = u
             sol.num_bins = nb
             return f, u, nb, pl
-        res = evaluate_solution(sol, pieces_expanded, trucks, piece_info, engine)
+        res = evaluate_solution(sol, pieces_expanded, trucks, piece_info,
+                                engine, bin_cache=_bin_cache,
+                                deadline=deadline)
+        if res is None:
+            return None
         if len(_eval_cache) < _EVAL_CACHE_MAX:
             _eval_cache[key] = res
         return res
@@ -457,9 +627,21 @@ def tabu_search_3d_optimization(
     freq_matrix = FrequencyMatrix(total_pieces, max_bins + 2)
     current_tenure = tabu_tenure
 
-    for iteration in range(max_iterations):
+    # ── Durma ölçütü ────────────────────────────────────────────────────
+    # DÜZELTME (22 Ekim 2026): döngü `range(max_iterations)` ile kesiliyordu
+    # ve varsayılan 200 yineleme zaman bütçesinden ÇOK önce doluyordu.
+    # Ölçüldü (deney/scripts/algoritma_denetimi.py, 112 parça, 4 sn bütçe):
+    # Tabu 0,1 sn'de bitiyordu; SA aynı bütçenin 5,5 sn'sini kullanıyordu.
+    # Zaman bütçeli karşılaştırmada bu adil değildi.
+    #
+    # Yeni kural: `max_time > 0` verilmişse DURMA ÖLÇÜTÜ ZAMANDIR; yineleme
+    # sayısı sınır olmaktan çıkar. `max_time <= 0` ise eski davranış sürer.
+    # Dış arayüz değişmedi; `max_iterations` hâlâ kabul ediliyor.
+    yineleme_siniri = max_iterations if max_time <= 0 else 10 ** 9
+
+    for iteration in range(yineleme_siniri):
         elapsed = time.time() - start_time
-        if elapsed >= max_time:
+        if elapsed >= max_time > 0:
             break
         if progress_callback:
             try:
@@ -493,7 +675,19 @@ def tabu_search_3d_optimization(
         best_select_score = float('inf')
         best_neighbor_util, best_neighbor_bins, best_neighbor_plan = 0.0, 0, None
         for neighbor, move, tabu_flag in neighbors:
-            f, u, nb, p = _eval_cached(neighbor)
+            # BÜYÜK ÖLÇEK: bütçe eskiden yalnız YİNELEMELER ARASINDA
+            # bakılıyordu. 365+ parçalık örneklerde tek bir yinelemenin
+            # aday listesi (8 aday × tam yeniden paketleme) bütçeyi tek
+            # başına aşabiliyor. Artık aday döngüsünün içinde de bakılır;
+            # o ana kadarki en iyi aday kullanılır (çözüm geçerliliği ve
+            # amaç fonksiyonu değişmez, yalnız daha erken durulur).
+            _son_tarih = (start_time + max_time) if max_time > 0 else None
+            _sonuc = _eval_cached(neighbor, deadline=_son_tarih)
+            if _sonuc is None:
+                # Süre doldu: YARIM değerlendirme aday sayılmaz, o ana
+                # kadarki en iyi TAMAMLANMIŞ aday kullanılır.
+                break
+            f, u, nb, p = _sonuc
             if tabu_flag and not (f < best_fitness):   # aspiration criterion
                 continue
             freq_pen = (freq_matrix.penalty(move.piece_idx, move.to_bin,
@@ -543,34 +737,141 @@ def tabu_search_3d_optimization(
     print(f"  🚛 Kamyonet    : {final_bins} adet")
     print(f"  📊 Kullanım    : %{final_util:.1f}")
     print(f"  ⏱️  Süre        : {execution_time:.2f}s")
-    return final_plan
+    # Sonuç tohumdan kötüyse tohumu döndür (asla geriye gitme)
+    return tohum_korumasi(final_plan, initial_solution, trucks, piece_info)
 
 
 # ─── YARDIMCI FONKSİYONLAR (KORUNDU) ────────────────────────────────────────
 
+ILK_COZUM_DOLULUK_PAYI = 0.95
+"""İlk çözümde bir bin'i kapatma eşiği. Geometri hesaba katılmadığı için
+%100 hedeflemek gerçekçi değil; kalan payı yerleştirme motoru kullanır."""
+
+
+def _acilacak_araclar(trucks, max_bins):
+    """Bin sırasına karşılık gelen araçlar — FiloHavuzu ile AYNI sıra.
+
+    Havuz, araçları hacme göre büyükten küçüğe açar ve her tipten
+    `available` adet açabilir. İlk çözüm de aynı diziyi varsayarsa
+    bin'ler gerçekten atanacak araca göre boyutlanır.
+    """
+    sira = []
+    for t in arac_sirala(trucks):
+        adet = max(1, int(getattr(t, "available", 1) or 1))
+        sira.extend([t] * adet)
+        if len(sira) >= max_bins:
+            break
+    return sira[:max_bins] if sira else []
+
+
+def en_iyi_baslangic(adaylar, pieces_expanded, trucks, piece_info,
+                     engine, bin_cache=None):
+    """Birden çok başlangıç adayından ORTAK AMACA göre en iyisini seç.
+
+    GEREKÇE (ölçüldü 22 Ekim 2026, BR7/thpack7, 110 parça):
+      FFD planı              : 90/110 parça · amaç 472,2
+      FFD → TSSolution → EP  : 82/110 parça · amaç 656,4   ← Tabu buradan
+      Tabu'nun kendi ilk çözümü: 76/110 parça · amaç 794,3
+    Tohumu çözüm gösterimine çevirip yeniden paketlemek 8 parça
+    kaybettiriyordu; arama bozulmuş bir noktadan başlıyor ve FFD'nin
+    kalitesini hiç göremiyordu. Artık adaylar değerlendirilip en iyisinden
+    başlanır. FFD körlemesine DAYATILMAZ: kendi ilk çözümü daha iyiyse o
+    kullanılır.
+
+    Returns: (cozum, fitness, util, n_bins, plan)
+    """
+    en_iyi = None
+    for aday in adaylar:
+        if aday is None:
+            continue
+        f, u, nb, p = evaluate_solution(
+            aday, pieces_expanded, trucks, piece_info, engine,
+            bin_cache=bin_cache)
+        if en_iyi is None or f < en_iyi[1]:
+            en_iyi = (aday, f, u, nb, p)
+    return en_iyi
+
+
+def tohum_korumasi(sonuc_plan, tohum_plan, trucks, piece_info):
+    """Sonuç, verilen tohumdan KÖTÜ ise tohumu geri döndür.
+
+    Yerel arama yöntemleri bulunan en iyi çözümü saklamalı, asla daha
+    kötüsüyle dönmemelidir. Tohum arama gösterimine çevrilirken parça
+    kaybı olabildiği için (yukarıdaki ölçüm) bu koruma gerekli.
+    Karşılaştırma ORTAK AMAÇ fonksiyonuyla yapılır.
+    """
+    if tohum_plan is None or not getattr(tohum_plan, "bins", None):
+        return sonuc_plan
+    from amac_fonksiyonu import plan_uygunlugu
+    if plan_uygunlugu(tohum_plan, trucks, piece_info) <             plan_uygunlugu(sonuc_plan, trucks, piece_info):
+        return tohum_plan
+    return sonuc_plan
+
+
 def _create_initial_solution(pieces, trucks, max_bins=999):
-    """[KORUNDU]"""
+    """Tabu ve SA'nın başlangıç çözümü.
+
+    DÜZELTME (22 Ekim 2026) — eskiden üç sorunu vardı:
+      1. Bütün bin'leri `trucks[0]`'ın hacmine göre kesiyordu. Heterojen
+         filoda (bizim durumumuz) bu yanlış: ikinci bin başka boyda bir
+         araca gidebiliyor.
+      2. Yalnız HACME bakıyordu. Yoğun yükte aracı önce AĞIRLIK doldurur
+         (bkz. doluluk.py — U_W); ağırlık yok sayılınca ilk çözüm baştan
+         kapasite dışı oluyordu.
+      3. Parça hacmini dış kutudan alıyordu; silindirde gerçek hacim
+         πr²h'tir ve dış kutudan ~%21 küçüktür.
+
+    Artık bin, kendisine atanacak aracın hacmi VEYA faydalı yükü dolunca
+    kapanır. Bu yalnızca bir BAŞLANGIÇ tahminidir; geometriyi ve asıl
+    yerleşimi `evaluate_solution` içindeki motor belirler.
+    """
     n = len(pieces)
     # Priority: None önce (tırın içi), 1 en sona (kapıya yakın)
     sorted_indices = sorted(range(n),
                             key=lambda i: (
                                 0 if pieces[i].priority is None else 1,
                                 -(pieces[i].priority if pieces[i].priority is not None else 0),
-                                -(pieces[i].width * pieces[i].length * pieces[i].height),
+                                -pieces[i].get_actual_volume(),
                             ))
-    truck_vol = trucks[0].get_volume() if trucks else 1
+
+    arac_dizisi = _acilacak_araclar(trucks, max_bins)
+
+    def _sinirlar(bin_no):
+        """(hacim sınırı, ağırlık sınırı) — ağırlık bilinmiyorsa None."""
+        if not arac_dizisi:
+            return float("inf"), None
+        t = arac_dizisi[min(bin_no, len(arac_dizisi) - 1)]
+        kapasite = float(getattr(t, "capacity", 0) or 0)
+        return (t.get_volume() * ILK_COZUM_DOLULUK_PAYI,
+                kapasite if kapasite > 0 else None)
+
     bin_assignments = [0] * n
     piece_orders: Dict[int, List[int]] = {0: []}
-    current_bin, current_vol = 0, 0
+    current_bin = 0
+    current_vol = 0.0
+    current_kg = 0.0
+    hacim_siniri, agirlik_siniri = _sinirlar(0)
+
     for idx in sorted_indices:
-        vol = pieces[idx].width * pieces[idx].length * pieces[idx].height
-        if current_vol + vol > truck_vol * 0.95 and current_bin + 1 < max_bins:
+        parca = pieces[idx]
+        vol = parca.get_actual_volume()
+        kg = float(getattr(parca, "weight", 0) or 0)
+
+        hacim_doldu = current_vol + vol > hacim_siniri
+        agirlik_doldu = (agirlik_siniri is not None
+                         and current_kg + kg > agirlik_siniri)
+        if (hacim_doldu or agirlik_doldu) and current_bin + 1 < max_bins:
             current_bin += 1
-            current_vol = 0
+            current_vol = 0.0
+            current_kg = 0.0
+            hacim_siniri, agirlik_siniri = _sinirlar(current_bin)
             piece_orders[current_bin] = []
+
         bin_assignments[idx] = current_bin
         piece_orders[current_bin].append(idx)
         current_vol += vol
+        current_kg += kg
+
     return TSSolution(bin_assignments=bin_assignments, piece_orders=piece_orders)
 
 
